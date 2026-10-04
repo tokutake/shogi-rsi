@@ -167,6 +167,52 @@ fn is_slider_dir(pt: u8, dr: i32, dc: i32) -> bool {
     }
 }
 
+
+// ---- 事前計算テーブル（高速化） ----
+pub struct Tables {
+    /// ray[sq][dir] = その方向に並ぶマス（近い順）
+    pub ray: [[[u8; 8]; 8]; 81],
+    pub ray_len: [[u8; 8]; 81],
+    /// step_mask[color][pt] = 1歩で動ける方向のビット集合（盤上の向き）
+    pub step_mask: [[u8; 16]; 2],
+    /// slide_mask[color][pt] = 飛んで動ける方向のビット集合
+    pub slide_mask: [[u8; 16]; 2],
+}
+
+pub fn tables() -> &'static Tables {
+    use std::sync::OnceLock;
+    static T: OnceLock<Tables> = OnceLock::new();
+    T.get_or_init(|| {
+        let mut t = Tables { ray: [[[0; 8]; 8]; 81], ray_len: [[0; 8]; 81], step_mask: [[0; 16]; 2], slide_mask: [[0; 16]; 2] };
+        for sq in 0..81 {
+            for (d, &(dr, dc)) in DIRS8.iter().enumerate() {
+                let (mut r, mut c) = ((sq / 9) as i32 + dr, (sq % 9) as i32 + dc);
+                let mut n = 0;
+                while (0..9).contains(&r) && (0..9).contains(&c) {
+                    t.ray[sq][d][n] = (r * 9 + c) as u8;
+                    n += 1;
+                    r += dr;
+                    c += dc;
+                }
+                t.ray_len[sq][d] = n as u8;
+            }
+        }
+        for color in 0..2 {
+            let sign = if color == BLACK { 1 } else { -1 };
+            for pt in 1..15u8 {
+                for (d, &(dr, dc)) in DIRS8.iter().enumerate() {
+                    if is_slider_dir(pt, dr * sign, dc * sign) {
+                        t.slide_mask[color][pt as usize] |= 1 << d;
+                    } else if can_step_black(pt, dr * sign, dc * sign) {
+                        t.step_mask[color][pt as usize] |= 1 << d;
+                    }
+                }
+            }
+        }
+        t
+    })
+}
+
 // ---- Zobrist ----
 struct Zobrist {
     board: [[u64; 81]; 32],
@@ -531,43 +577,45 @@ impl Position {
     // ---- 利き判定 ----
     /// sq に color 側の駒の利きがあるか
     pub fn is_attacked(&self, sq: usize, by: Color) -> bool {
-        let r0 = (sq / 9) as i32;
-        let c0 = (sq % 9) as i32;
-        for &(dr, dc) in DIRS8.iter() {
-            let mut r = r0 + dr;
-            let mut c = c0 + dc;
-            let mut dist = 1;
-            while (0..9).contains(&r) && (0..9).contains(&c) {
-                let p = self.board[(r * 9 + c) as usize];
-                if p != EMPTY {
-                    if color_of(p) == by {
-                        // 攻め駒から sq への方向は (-dr,-dc)。先手視点に直す。
-                        let (mdr, mdc) = if by == BLACK { (-dr, -dc) } else { (dr, dc) };
-                        let pt = ptype(p);
-                        if dist == 1 && can_step_black(pt, mdr, mdc) {
-                            return true;
-                        }
-                        if dist > 1 && is_slider_dir(pt, mdr, mdc) {
-                            return true;
-                        }
-                    }
-                    break;
-                }
-                r += dr;
-                c += dc;
-                dist += 1;
+        let t = tables();
+        for d in 0..8 {
+            let len = t.ray_len[sq][d] as usize;
+            if len == 0 {
+                continue;
             }
-        }
-        // 桂馬: by 側の桂は sq から見て (by が先手なら +2段) の位置
-        let kr = if by == BLACK { r0 + 2 } else { r0 - 2 };
-        if (0..9).contains(&kr) {
-            for kc in [c0 - 1, c0 + 1] {
-                if (0..9).contains(&kc) {
-                    let p = self.board[(kr * 9 + kc) as usize];
-                    if p == make_piece(by, KNIGHT) {
+            let od = 7 - d; // 攻め駒から sq への方向
+            let ray = &t.ray[sq][d];
+            let p = self.board[ray[0] as usize];
+            if p != EMPTY {
+                if color_of(p) == by {
+                    let pt = ptype(p) as usize;
+                    if (t.step_mask[by][pt] | t.slide_mask[by][pt]) & (1 << od) != 0 {
                         return true;
                     }
                 }
+                continue;
+            }
+            for i in 1..len {
+                let p = self.board[ray[i] as usize];
+                if p != EMPTY {
+                    if color_of(p) == by && t.slide_mask[by][ptype(p) as usize] & (1 << od) != 0 {
+                        return true;
+                    }
+                    break;
+                }
+            }
+        }
+        // 桂馬
+        let r0 = (sq / 9) as i32;
+        let c0 = (sq % 9) as i32;
+        let kr = if by == BLACK { r0 + 2 } else { r0 - 2 };
+        if (0..9).contains(&kr) {
+            let kn = make_piece(by, KNIGHT);
+            if c0 > 0 && self.board[(kr * 9 + c0 - 1) as usize] == kn {
+                return true;
+            }
+            if c0 < 8 && self.board[(kr * 9 + c0 + 1) as usize] == kn {
+                return true;
             }
         }
         false
@@ -623,8 +671,8 @@ impl Position {
             }
             let pt = ptype(p);
             let fr = (from / 9) as i32;
-            let fc = (from % 9) as i32;
             if pt == KNIGHT {
+                let fc = (from % 9) as i32;
                 let tr = fr - 2 * sign;
                 if (0..9).contains(&tr) {
                     for tc in [fc - 1, fc + 1] {
@@ -643,30 +691,27 @@ impl Position {
                 }
                 continue;
             }
-            for &(dr, dc) in DIRS8.iter() {
-                // 盤上の向き (dr,dc) を先手視点に変換して判定
-                let (bdr, bdc) = (dr * sign, dc * sign);
-                let step = can_step_black(pt, bdr, bdc);
-                let slide = is_slider_dir(pt, bdr, bdc);
-                if !step && !slide {
+            let t = tables();
+            let smask = t.step_mask[us][pt as usize];
+            let lmask = t.slide_mask[us][pt as usize];
+            for d in 0..8 {
+                let bit = 1u8 << d;
+                if (smask | lmask) & bit == 0 {
                     continue;
                 }
-                let mut tr = fr + dr;
-                let mut tc = fc + dc;
-                while (0..9).contains(&tr) && (0..9).contains(&tc) {
-                    let to = (tr * 9 + tc) as usize;
-                    let t = self.board[to];
-                    if t != EMPTY && color_of(t) == us {
+                let len = if lmask & bit != 0 { t.ray_len[from][d] as usize } else { (t.ray_len[from][d] as usize).min(1) };
+                for i in 0..len {
+                    let to = t.ray[from][d][i] as usize;
+                    let tgt = self.board[to];
+                    if tgt != EMPTY && color_of(tgt) == us {
                         break;
                     }
-                    if !captures_only || t != EMPTY {
-                        self.push_board_move(list, from, to, pt, fr, tr);
+                    if !captures_only || tgt != EMPTY {
+                        self.push_board_move(list, from, to, pt, fr, (to / 9) as i32);
                     }
-                    if t != EMPTY || !slide {
+                    if tgt != EMPTY {
                         break;
                     }
-                    tr += dr;
-                    tc += dc;
                 }
             }
         }
@@ -726,7 +771,7 @@ impl Position {
         res
     }
 
-    fn has_legal_move(&mut self) -> bool {
+    pub fn has_legal_move(&mut self) -> bool {
         let mut list = Vec::with_capacity(128);
         self.pseudo_moves(&mut list, false);
         let us = self.side;

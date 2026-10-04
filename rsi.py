@@ -42,6 +42,14 @@ CODENAMES = [
 ]
 
 
+def install(src, dst):
+    """実行中のバイナリを上書きしても壊れないよう、一時ファイル経由で置き換える"""
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    tmp = f"{dst}.tmp{os.getpid()}"
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dst)
+
+
 def sh(cmd, **kw):
     print("+", " ".join(cmd), file=sys.stderr)
     return subprocess.run(cmd, check=True, **kw)
@@ -102,16 +110,14 @@ def build_version(v):
         os.makedirs(os.path.dirname(wt), exist_ok=True)
         sh(["git", "-C", ROOT, "worktree", "add", "--detach", "--force", wt, v["commit"]])
     binary = cargo_build(wt, lbl)
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    shutil.copy2(binary, dst)
+    install(binary, dst)
     return dst
 
 
 def build_candidate():
     binary = cargo_build(ROOT, "candidate")
     dst = engine_path("candidate")
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    shutil.copy2(binary, dst)
+    install(binary, dst)
     return dst
 
 
@@ -130,8 +136,7 @@ def arena_binary():
     # 審判は常に現在のコードのアリーナを使う
     p = os.path.join(BUILD, "arena", "shogi-rsi")
     binary = cargo_build(ROOT, "arena")
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    shutil.copy2(binary, p)
+    install(binary, p)
     return p
 
 

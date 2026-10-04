@@ -22,5 +22,13 @@
     "parent": "v2-botan",
     "created": "2026-10-04T05:21:58Z",
     "description": "評価改善: 玉との距離による守り駒/攻め駒の配置評価 + 玉の段"
+  },
+  {
+    "number": 4,
+    "name": "daidai",
+    "commit": "120c426d8f65bae96e5a8cab93184e3e2ab2fb79",
+    "parent": "v3-chidori",
+    "created": "2026-10-04T05:30:37Z",
+    "description": "枝刈り追加: reverse futility / futility / 静止探索の delta・簡易SEE"
   }
 ]

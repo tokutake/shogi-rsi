@@ -91,7 +91,8 @@ pub fn run_tune(args: &[String]) {
     let mut data_paths = Vec::new();
     let mut epochs = 300;
     let mut out = "src/params.rs".to_string();
-    let mut lr = 2.0;
+    let mut lr = 0.5;
+    let mut l2 = 1e-6;
     let mut min_ply = 16;
     let mut i = 0;
     while i < args.len() {
@@ -100,6 +101,7 @@ pub fn run_tune(args: &[String]) {
             "--epochs" => epochs = args[i + 1].parse().unwrap(),
             "--out" => out = args[i + 1].clone(),
             "--lr" => lr = args[i + 1].parse().unwrap(),
+            "--l2" => l2 = args[i + 1].parse().unwrap(),
             "--min-ply" => min_ply = args[i + 1].parse().unwrap(),
             _ => {
                 i += 1;
@@ -126,6 +128,7 @@ pub fn run_tune(args: &[String]) {
     }
 
     let mut params: Vec<f64> = P.iter().map(|&v| v as f64).collect();
+    let init = params.clone();
     // 1. スケール K を探す
     let mut best_k = 0.004;
     let mut best_l = f64::MAX;
@@ -162,7 +165,8 @@ pub fn run_tune(args: &[String]) {
             if fixed(i) {
                 continue;
             }
-            let g = grad[i] / n;
+            // 初期値（現行パラメータ）への L2 正則化でデータ不足時の暴走を防ぐ
+            let g = grad[i] / n + l2 * (params[i] - init[i]);
             m[i] = b1 * m[i] + (1.0 - b1) * g;
             v[i] = b2 * v[i] + (1.0 - b2) * g * g;
             let mh = m[i] / (1.0 - b1.powi(epoch));
