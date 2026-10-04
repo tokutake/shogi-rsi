@@ -27,8 +27,13 @@
 ## ルール
 
 - バージョンは番号＋コードネームで呼ぶ（`v3-chidori`）。ハッシュでは呼ばない。
-- 登録済みバージョンのコミットは書き換えない（rebase/force-push 禁止）。旧版は worktree からビルドされる。
+- 登録済みバージョンのコミットは書き換えない（rebase/force-push 禁止、PR は squash merge しない）。
+  旧版は versions.json のコミットから worktree でビルドされるため、コミットが消えると旧版を再現できなくなる。
 - 対局条件（byoyomi など）を変えたときは、比較は同条件の対局同士で行うこと。
 - アリーナ（審判）のコードは src/arena.rs と src/position.rs を共有している。審判のルールを変更したら
   その旨を docs/IDEAS.md に記録する。
+- 計測用の対局は他の重い処理（別の対局・自己対局生成）と並走させないこと。CPU が足りないと遅い側が不当に負ける。
+  コア数 4 なら `--concurrency 4` の対局を 1 本だけ流す。
+- 評価関数の特徴量を増やしたら `shogi-rsi tune`（README 参照）で params.rs を再生成してから対局で比較する。
+  学習データは results/*.jsonl の moves。自己対局が足りなければ README の手順で生成する。
 - テストコマンド: `cargo build --release && ./target/release/shogi-rsi perft 4`（719731）

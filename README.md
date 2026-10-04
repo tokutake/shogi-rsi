@@ -19,7 +19,18 @@ cargo build --release                 # エンジンのビルド
 ./rsi.py match v2 v1 --games 100       # 対局して記録、RATINGS.md 更新
 ./rsi.py match candidate v2 --games 100  # 作業中のコードを試す（記録は別ファイル）
 ./rsi.py register --desc "何を変えたか"   # HEAD を次のバージョンとして登録
+
+# 評価関数の自動調整（対局記録の全指し手から局面と勝敗を集めて Texel tuning、src/params.rs を上書き）
+./target/release/shogi-rsi tune --data results/games.jsonl --data results/candidate_games.jsonl --data results/selfplay.jsonl --l2 1e-7
+
+# 自己対局データの生成（tune 用）
+./build/arena/shogi-rsi arena --engine1 engines/v5-enoki/shogi-rsi --engine2 engines/v5-enoki/shogi-rsi \
+    --name1 a --name2 b --games 400 --byoyomi 50 --concurrency 4 --seed 123 --out results/selfplay.jsonl
 ```
+
+## 現在の到達点
+
+[RATINGS.md](RATINGS.md) を参照。土台構築セッション（約1時間）で v1 → v5 で約 +380 Elo（v1-ayame = 1000 → v5-enoki ≈ 1383）。
 
 ## ディレクトリ
 
@@ -29,11 +40,15 @@ cargo build --release                 # エンジンのビルド
 | `src/eval.rs` | 評価関数 |
 | `src/search.rs` | 探索（反復深化 αβ / PVS / null move / LMR / 静止探索 / 置換表） |
 | `src/usi.rs` | USI プロトコル |
+| `src/params.rs` | 評価パラメータ（`shogi-rsi tune` が生成） |
+| `src/tune.rs` | Texel tuning |
 | `src/arena.rs` | 対局アリーナ（審判つき、並列対局、JSON Lines 出力） |
 | `rsi.py` | バージョン登録・旧版ビルド・対局・Elo 計算 |
 | `versions.json` | バージョン台帳（番号・コードネーム・コミット・説明） |
 | `results/games.jsonl` | 正式な対局記録（登録済みバージョン同士）。Elo はここから計算 |
-| `results/candidate_games.jsonl` | 未登録コードの試験対局（参考記録） |
+| `results/candidate_games.jsonl` | 未登録コードの試験対局（参考記録、tune の学習データにも使う） |
+| `results/selfplay.jsonl` | 自己対局（tune の学習データ） |
+| `docs/IDEAS.md` | 改善アイデアと試行記録（不採用案のパッチは docs/patches/） |
 | `RATINGS.md` | 自動生成のレーティング表 |
 | `CLAUDE.md` | 定期改善タスク（エージェント）向けの手順書 |
 | `docs/WORKLOG.md` | 作業ログ |

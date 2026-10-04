@@ -1,0 +1,111 @@
+diff --git a/src/eval.rs b/src/eval.rs
+index e1ec066..00dbf26 100644
+--- a/src/eval.rs
++++ b/src/eval.rs
+@@ -17,7 +17,9 @@ pub const IDX_ATK_MAJOR: usize = 59;
+ pub const IDX_ATK_PAWN: usize = 68;
+ pub const IDX_KING_RANK: usize = 77;
+ pub const IDX_ATK_KL: usize = 86;
+-pub const NUM_PARAMS: usize = 95;
++pub const IDX_KING_ADJ_ATK: usize = 95;
++pub const IDX_KING_EMPTY_HAND: usize = 104;
++pub const NUM_PARAMS: usize = 105;
+ 
+ /// 指し手の並べ替え等で使う駒の価値
+ pub const PIECE_VALUE: [i32; 15] = [
+@@ -78,6 +80,31 @@ pub fn eval_terms<F: FnMut(Color, usize, i32)>(pos: &Position, mut f: F) {
+             }
+         }
+     }
++    // 玉の安全度: 玉の周囲8マスのうち敵の利きがあるマスの数、空きマス数×相手の持ち駒（歩以外）の枚数
++    let t = tables();
++    for c in 0..2 {
++        let k = ksq[c];
++        let mut attacked = 0;
++        let mut empty = 0;
++        for d in 0..8 {
++            if t.ray_len[k][d] == 0 {
++                continue;
++            }
++            let sq = t.ray[k][d][0] as usize;
++            let p = pos.board[sq];
++            if p == EMPTY {
++                empty += 1;
++            }
++            if (p == EMPTY || color_of(p) == c) && pos.is_attacked(sq, c ^ 1) {
++                attacked += 1;
++            }
++        }
++        f(c, IDX_KING_ADJ_ATK + attacked, 1);
++        let enemy_hand: i32 = (2..8).map(|pt| pos.hand[c ^ 1][pt] as i32).sum();
++        if empty * enemy_hand > 0 {
++            f(c, IDX_KING_EMPTY_HAND, empty * enemy_hand);
++        }
++    }
+ }
+ 
+ pub fn evaluate(pos: &Position) -> i32 {
+diff --git a/src/params.rs b/src/params.rs
+index 7cd34b8..296b986 100644
+--- a/src/params.rs
++++ b/src/params.rs
+@@ -1,25 +1,29 @@
+ //! 評価関数のパラメータ。`shogi-rsi tune` で自動生成・上書きされる。
+ //! レイアウトは eval.rs の IDX_* を参照。
+ 
+-pub const P: [i32; 95] = [
++pub const P: [i32; 105] = [
+     // PIECE_VALUE (盤上, 駒種 0..14)
+-    0, 162, 303, 399, 490, 558, 828, 963, 15000, 519, 534, 548, 535, 986, 1415,
++    0, 188, 295, 391, 482, 562, 797, 949, 15000, 501, 536, 536, 528, 1017, 1414,
+     // HAND_VALUE (0..7)
+-    0, 109, 343, 428, 567, 609, 937, 1088,
++    0, 73, 342, 410, 578, 618, 921, 1078,
+     // DEF_GOLD (距離 0..8)
+-    0, 124, 29, -1, -7, -12, -18, -26, -41,
++    0, 153, 40, -4, -13, -23, -34, -44, -57,
+     // DEF_SILVER
+-    0, 103, 22, -18, -11, -7, -9, -13, -12,
++    0, 132, 17, -39, -17, -8, -11, -15, -13,
+     // DEF_HORSE
+-    0, 42, 32, 14, 6, 10, 0, -3, 16,
++    0, 43, 36, 17, 12, 14, -1, -3, 31,
+     // ATK_MINOR
+-    0, 45, 65, 30, -31, -19, -15, 25, -5,
++    0, 47, 90, 40, -72, -32, -29, 44, -31,
+     // ATK_MAJOR
+-    0, 37, 59, 72, 51, 31, -1, -93, -35,
++    0, 39, 84, 101, 60, 38, 7, -163, -59,
+     // ATK_PAWN
+-    0, 12, 8, 13, 5, 34, 33, -4, 0,
++    0, 6, 2, 13, 3, 43, 71, -11, -1,
+     // KING_RANK (自陣から見た段)
+-    22, 20, 0, -29, -61, -79, -87, -101, -93,
++    9, 21, -1, -27, -61, -76, -85, -102, -87,
+     // ATK_KL (香・桂)
+-    0, 18, 19, 26, -6, 12, -4, 0, -31,
++    0, 14, 23, 40, -23, 25, -3, -4, -53,
++    // KING_ADJ_ATK (玉の周囲で敵の利きがあるマス数 0..8)
++    32, -17, -29, -57, -75, -101, -131, -160, -190,
++    // KING_EMPTY_HAND (玉の周囲の空きマス数 × 相手の持ち駒枚数)
++    22,
+ ];
+diff --git a/src/tune.rs b/src/tune.rs
+index fc2cd81..a0b8465 100644
+--- a/src/tune.rs
++++ b/src/tune.rs
+@@ -199,9 +199,12 @@ fn write_params(path: &str, params: &[f64]) {
+         ("ATK_PAWN", 68, 9),
+         ("KING_RANK (自陣から見た段)", 77, 9),
+         ("ATK_KL (香・桂)", 86, 9),
++        ("KING_ADJ_ATK (玉の周囲で敵の利きがあるマス数 0..8)", 95, 9),
++        ("KING_EMPTY_HAND (玉の周囲の空きマス数 × 相手の持ち駒枚数)", 104, 1),
+     ];
+-    let mut s = String::from(
+-        "//! 評価関数のパラメータ。`shogi-rsi tune` で自動生成・上書きされる。\n//! レイアウトは eval.rs の IDX_* を参照。\n\npub const P: [i32; 95] = [\n",
++    let mut s = format!(
++        "//! 評価関数のパラメータ。`shogi-rsi tune` で自動生成・上書きされる。\n//! レイアウトは eval.rs の IDX_* を参照。\n\npub const P: [i32; {}] = [\n",
++        NUM_PARAMS
+     );
+     for (name, start, len) in names.iter() {
+         s.push_str(&format!("    // {}\n    ", name));

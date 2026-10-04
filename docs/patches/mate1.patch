@@ -1,0 +1,50 @@
+diff --git a/src/search.rs b/src/search.rs
+index 0944c24..3db5ea2 100644
+--- a/src/search.rs
++++ b/src/search.rs
+@@ -383,6 +383,34 @@ impl Searcher {
+         best_score
+     }
+ 
++    /// 1手詰めがあればその手を返す（敵玉の近く=チェビシェフ距離2以内に指す/打つ手だけを調べる）
++    fn mate1(&mut self, pos: &mut Position) -> Option<Move> {
++        let them = pos.side ^ 1;
++        let ksq = pos.king_sq[them];
++        let (kr, kc) = ((ksq / 9) as i32, (ksq % 9) as i32);
++        let mut moves = Vec::with_capacity(160);
++        pos.pseudo_moves(&mut moves, false);
++        for &m in moves.iter() {
++            let to = mv_to(m);
++            let (tr, tc) = ((to / 9) as i32, (to % 9) as i32);
++            if (tr - kr).abs() > 2 || (tc - kc).abs() > 2 {
++                continue;
++            }
++            if mv_is_drop(m) && mv_drop_pt(m) == PAWN {
++                continue; // 打ち歩詰めは反則
++            }
++            if !self.try_move(pos, m) {
++                continue;
++            }
++            let mate = pos.in_check() && !pos.has_legal_move();
++            pos.undo_move();
++            if mate {
++                return Some(m);
++            }
++        }
++        None
++    }
++
+     fn qsearch(&mut self, pos: &mut Position, ply: usize, mut alpha: i32, beta: i32, qdepth: i32) -> i32 {
+         self.nodes += 1;
+         self.check_stop();
+@@ -399,6 +427,10 @@ impl Searcher {
+             if stand >= beta {
+                 return stand;
+             }
++            // 末端で1手詰めを見逃さない（stand pat で打ち切れない局面のみ）
++            if qdepth == 0 && stand + 1500 >= alpha && self.mate1(pos).is_some() {
++                return MATE - ply as i32 - 1;
++            }
+             if stand > alpha {
+                 alpha = stand;
+             }
