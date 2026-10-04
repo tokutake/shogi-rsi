@@ -1,8 +1,10 @@
 #![allow(dead_code)]
 mod arena;
 mod eval;
+mod params;
 mod position;
 mod search;
+mod tune;
 mod usi;
 
 use position::*;
@@ -49,6 +51,7 @@ fn main() {
             let secs = t.elapsed().as_secs_f64();
             println!("bench: nodes {} time {:.2}s nps {:.0}", total, secs, total as f64 / secs);
         }
+        Some("tune") => tune::run_tune(&args[2..]),
         Some("arena") => {
             let e1 = arg_value(&args, "--engine1").expect("--engine1 path");
             let e2 = arg_value(&args, "--engine2").expect("--engine2 path");

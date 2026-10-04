@@ -123,6 +123,7 @@ pub struct GameResult {
     pub reason: String,
     pub plies: usize,
     pub opening: Vec<String>,
+    pub moves: Vec<String>,
 }
 
 fn play_game(
@@ -143,43 +144,44 @@ fn play_game(
     for e in engines.iter_mut() {
         e.send("usinewgame");
     }
-    let result = |winner: Option<usize>, reason: &str, plies: usize| GameResult {
+    let result = |winner: Option<usize>, reason: &str, moves: &Vec<String>| GameResult {
         black: names[black_idx].to_string(),
         white: names[black_idx ^ 1].to_string(),
         winner,
         reason: reason.to_string(),
-        plies,
+        plies: moves.len(),
         opening: opening.to_vec(),
+        moves: moves.clone(),
     };
     loop {
         let side = pos.side;
         let eidx = if side == BLACK { black_idx } else { black_idx ^ 1 };
         let legal = pos.legal_moves();
         if legal.is_empty() {
-            return result(Some(side ^ 1), "mate", moves.len());
+            return result(Some(side ^ 1), "mate", &moves);
         }
         if moves.len() >= max_plies {
-            return result(None, "max_plies", moves.len());
+            return result(None, "max_plies", &moves);
         }
         let e = &mut engines[eidx];
         e.send(&format!("position startpos moves {}", moves.join(" ")));
         e.send(&format!("go btime 0 wtime 0 byoyomi {}", byoyomi));
         let line = match e.wait_for("bestmove", byoyomi + 2000) {
             Ok(l) => l,
-            Err(_) => return result(Some(side ^ 1), "timeout", moves.len()),
+            Err(_) => return result(Some(side ^ 1), "timeout", &moves),
         };
         let mstr = line.split_whitespace().nth(1).unwrap_or("resign").to_string();
         if mstr == "resign" || mstr == "win" {
-            return result(Some(side ^ 1), "resign", moves.len());
+            return result(Some(side ^ 1), "resign", &moves);
         }
         let mv = match pos.parse_usi_move(&mstr) {
             Some(m) if legal.contains(&m) => m,
-            _ => return result(Some(side ^ 1), "illegal", moves.len()),
+            _ => return result(Some(side ^ 1), "illegal", &moves),
         };
         pos.do_move(mv);
         moves.push(mstr);
         if pos.repetition_count() >= 3 {
-            return result(None, "repetition", moves.len());
+            return result(None, "repetition", &moves);
         }
     }
 }
@@ -229,14 +231,15 @@ pub fn run_arena(cfg: ArenaConfig) {
                     None => String::new(),
                 };
                 let json = format!(
-                    "{{\"black\":\"{}\",\"white\":\"{}\",\"winner\":\"{}\",\"reason\":\"{}\",\"plies\":{},\"byoyomi\":{},\"opening\":\"{}\"}}",
+                    "{{\"black\":\"{}\",\"white\":\"{}\",\"winner\":\"{}\",\"reason\":\"{}\",\"plies\":{},\"byoyomi\":{},\"opening\":\"{}\",\"moves\":\"{}\"}}",
                     r.black,
                     r.white,
                     winner_name,
                     r.reason,
                     r.plies,
                     cfg.byoyomi_ms,
-                    r.opening.join(" ")
+                    r.opening.join(" "),
+                    r.moves.join(" ")
                 );
                 if let Some(f) = &out_file {
                     let mut f = f.lock().unwrap();

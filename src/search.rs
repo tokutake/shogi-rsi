@@ -272,9 +272,15 @@ impl Searcher {
         let in_check = pos.in_check();
         let depth = if in_check { depth + 1 } else { depth };
 
+        let static_eval = if in_check { -INF } else { evaluate(pos) };
+
+        // Reverse futility pruning（静的評価が beta を大きく上回るなら打ち切り）
+        if !pv && !in_check && depth <= 3 && ply > 0 && beta.abs() < MATE - 1000 && static_eval - 150 * depth >= beta {
+            return static_eval;
+        }
+
         // Null move pruning
         if !pv && !in_check && depth >= 3 && ply > 0 && beta.abs() < MATE - 1000 && pos.last_move() != NO_MOVE {
-            let static_eval = evaluate(pos);
             if static_eval >= beta {
                 let r = 2 + depth / 4;
                 pos.do_null_move();
@@ -306,6 +312,13 @@ impl Searcher {
             }
             legal += 1;
             let gives_check = pos.in_check();
+            // Futility pruning: 浅い深さで静的評価が alpha に遠く届かない静かな手は読まない
+            if !pv && !in_check && !gives_check && quiet && depth <= 2 && legal > 1
+                && alpha.abs() < MATE - 1000 && static_eval + 120 * depth <= alpha
+            {
+                pos.undo_move();
+                continue;
+            }
             let mut score;
             if legal == 1 {
                 score = -self.negamax(pos, depth - 1, ply + 1, -beta, -alpha, pv);
@@ -396,6 +409,18 @@ impl Searcher {
         self.order_moves(pos, &mut moves, NO_MOVE, MAX_PLY);
         let mut legal = 0;
         for &m in moves.iter() {
+            if !in_check && !mv_is_drop(m) {
+                let victim = PIECE_VALUE[ptype(pos.board[mv_to(m)]) as usize];
+                let attacker = PIECE_VALUE[ptype(pos.board[mv_from(m)]) as usize];
+                // Delta pruning
+                if best + victim + 200 <= alpha && !mv_is_promo(m) {
+                    continue;
+                }
+                // 安い駒を高い駒で取り、取り返される手は読まない（簡易 SEE）
+                if attacker > victim + 50 && pos.is_attacked(mv_to(m), pos.side ^ 1) {
+                    continue;
+                }
+            }
             if !self.try_move(pos, m) {
                 continue;
             }
