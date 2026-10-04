@@ -30,5 +30,13 @@
     "parent": "v3-chidori",
     "created": "2026-10-04T05:30:37Z",
     "description": "枝刈り追加: reverse futility / futility / 静止探索の delta・簡易SEE"
+  },
+  {
+    "number": 5,
+    "name": "enoki",
+    "commit": "6afe179c68a406a736b332efce004462876f47f6",
+    "parent": "v4-daidai",
+    "created": "2026-10-04T05:46:33Z",
+    "description": "評価パラメータを自己対局データで自動調整(Texel) + 利き計算のテーブル化で約10%高速化"
   }
 ]
