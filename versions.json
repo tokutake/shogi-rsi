@@ -38,5 +38,13 @@
     "parent": "v4-daidai",
     "created": "2026-10-04T05:46:33Z",
     "description": "評価パラメータを自己対局データで自動調整(Texel) + 利き計算のテーブル化で約10%高速化"
+  },
+  {
+    "number": 6,
+    "name": "fuji",
+    "commit": "dfe7452a7a79703ff6f34de18e73fb934e9637c1",
+    "parent": "v5-enoki",
+    "created": "2026-10-04T06:26:24Z",
+    "description": "探索: Late move pruning + 対数式LMR + Aspiration window"
   }
 ]

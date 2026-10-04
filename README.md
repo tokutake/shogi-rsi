@@ -24,13 +24,13 @@ cargo build --release                 # エンジンのビルド
 ./target/release/shogi-rsi tune --data results/games.jsonl --data results/candidate_games.jsonl --data results/selfplay.jsonl --l2 1e-7
 
 # 自己対局データの生成（tune 用）
-./build/arena/shogi-rsi arena --engine1 engines/v5-enoki/shogi-rsi --engine2 engines/v5-enoki/shogi-rsi \
+./build/arena/shogi-rsi arena --engine1 engines/v6-fuji/shogi-rsi --engine2 engines/v6-fuji/shogi-rsi \
     --name1 a --name2 b --games 400 --byoyomi 50 --concurrency 4 --seed 123 --out results/selfplay.jsonl
 ```
 
 ## 現在の到達点
 
-[RATINGS.md](RATINGS.md) を参照。土台構築セッション（約1時間）で v1 → v5 で約 +380 Elo（v1-ayame = 1000 → v5-enoki ≈ 1383）。
+[RATINGS.md](RATINGS.md) を参照。土台構築セッション（約1時間）で v1 → v6 で約 +520 Elo（v1-ayame = 1000 → v6-fuji ≈ 1520）。
 
 ## ディレクトリ
 
