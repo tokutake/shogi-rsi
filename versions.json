@@ -1,0 +1,50 @@
+[
+  {
+    "number": 1,
+    "name": "ayame",
+    "commit": "3a67f363d469338255f7f39d503bd22d0976a3a2",
+    "parent": null,
+    "created": "2026-10-04T05:15:36Z",
+    "description": "初版: 駒得のみの評価 + αβ/静止探索/置換表/キラー"
+  },
+  {
+    "number": 2,
+    "name": "botan",
+    "commit": "8599dbcebfe3f10a17a7203dbca47523d2c75668",
+    "parent": "v1-ayame",
+    "created": "2026-10-04T05:19:33Z",
+    "description": "探索強化: PVS / null move / LMR / history"
+  },
+  {
+    "number": 3,
+    "name": "chidori",
+    "commit": "7b998913fbd9026675e5a49d716c7e5bdd0f9886",
+    "parent": "v2-botan",
+    "created": "2026-10-04T05:21:58Z",
+    "description": "評価改善: 玉との距離による守り駒/攻め駒の配置評価 + 玉の段"
+  },
+  {
+    "number": 4,
+    "name": "daidai",
+    "commit": "120c426d8f65bae96e5a8cab93184e3e2ab2fb79",
+    "parent": "v3-chidori",
+    "created": "2026-10-04T05:30:37Z",
+    "description": "枝刈り追加: reverse futility / futility / 静止探索の delta・簡易SEE"
+  },
+  {
+    "number": 5,
+    "name": "enoki",
+    "commit": "6afe179c68a406a736b332efce004462876f47f6",
+    "parent": "v4-daidai",
+    "created": "2026-10-04T05:46:33Z",
+    "description": "評価パラメータを自己対局データで自動調整(Texel) + 利き計算のテーブル化で約10%高速化"
+  },
+  {
+    "number": 6,
+    "name": "fuji",
+    "commit": "dfe7452a7a79703ff6f34de18e73fb934e9637c1",
+    "parent": "v5-enoki",
+    "created": "2026-10-04T06:26:24Z",
+    "description": "探索: Late move pruning + 対数式LMR + Aspiration window"
+  }
+]

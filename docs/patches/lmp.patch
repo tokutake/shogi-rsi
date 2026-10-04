@@ -1,0 +1,28 @@
+diff --git a/src/search.rs b/src/search.rs
+index 0944c24..f6d6642 100644
+--- a/src/search.rs
++++ b/src/search.rs
+@@ -312,6 +312,13 @@ impl Searcher {
+             }
+             legal += 1;
+             let gives_check = pos.in_check();
++            // Late move pruning: 浅い深さで後半の静かな手は読まない
++            if !pv && !in_check && !gives_check && quiet && depth <= 3 && legal > 8 + 4 * depth * depth
++                && best_score > -MATE + 1000
++            {
++                pos.undo_move();
++                continue;
++            }
+             // Futility pruning: 浅い深さで静的評価が alpha に遠く届かない静かな手は読まない
+             if !pv && !in_check && !gives_check && quiet && depth <= 2 && legal > 1
+                 && alpha.abs() < MATE - 1000 && static_eval + 120 * depth <= alpha
+@@ -326,7 +333,8 @@ impl Searcher {
+                 // Late move reduction
+                 let mut r = 0;
+                 if depth >= 3 && quiet && !in_check && !gives_check && legal > 3 {
+-                    r = 1 + (legal > 8) as i32 + (depth >= 8) as i32;
++                    r = (0.75 + (depth as f64).ln() * (legal as f64).ln() / 2.25) as i32;
++                    r = r.clamp(1, depth - 2);
+                     if pv {
+                         r -= 1;
+                     }

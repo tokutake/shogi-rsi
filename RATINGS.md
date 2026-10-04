@@ -1,0 +1,12 @@
+# レーティング表
+
+`./rsi.py ratings` で自動生成。基準: v1-ayame = 1000。全対局の Bradley-Terry 最尤推定（±は概算の標準誤差）。
+
+| バージョン | Elo | ± | 対局数 | 説明 |
+|---|---:|---:|---:|---|
+| v1-ayame | 1000 | 34 | 140 | 初版: 駒得のみの評価 + αβ/静止探索/置換表/キラー |
+| v2-botan | 1039 | 28 | 200 | 探索強化: PVS / null move / LMR / history |
+| v3-chidori | 1224 | 24 | 240 | 評価改善: 玉との距離による守り駒/攻め駒の配置評価 + 玉の段 |
+| v4-daidai | 1263 | 24 | 240 | 枝刈り追加: reverse futility / futility / 静止探索の delta・簡易SEE |
+| v5-enoki | 1383 | 22 | 320 | 評価パラメータを自己対局データで自動調整(Texel) + 利き計算のテーブル化で約10%高速化 |
+| v6-fuji | 1520 | 37 | 100 | 探索: Late move pruning + 対数式LMR + Aspiration window |
