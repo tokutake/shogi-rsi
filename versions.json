@@ -14,5 +14,13 @@
     "parent": "v1-ayame",
     "created": "2026-10-04T05:19:33Z",
     "description": "探索強化: PVS / null move / LMR / history"
+  },
+  {
+    "number": 3,
+    "name": "chidori",
+    "commit": "7b998913fbd9026675e5a49d716c7e5bdd0f9886",
+    "parent": "v2-botan",
+    "created": "2026-10-04T05:21:58Z",
+    "description": "評価改善: 玉との距離による守り駒/攻め駒の配置評価 + 玉の段"
   }
 ]
