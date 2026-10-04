@@ -1,0 +1,363 @@
+//! 探索部: 反復深化 + αβ(negamax) + 静止探索 + 置換表 + キラー/MVV-LVA。
+
+use crate::eval::{evaluate, PIECE_VALUE};
+use crate::position::*;
+use std::time::Instant;
+
+pub const INF: i32 = 32000;
+pub const MATE: i32 = 31000;
+pub const MAX_PLY: usize = 128;
+
+#[derive(Clone, Copy, Default)]
+struct TTEntry {
+    key: u64,
+    mv: Move,
+    score: i32,
+    depth: i8,
+    flag: u8, // 0 none, 1 exact, 2 lower, 3 upper
+}
+
+pub struct TT {
+    table: Vec<TTEntry>,
+    mask: usize,
+}
+
+impl TT {
+    pub fn new(mb: usize) -> Self {
+        let n = (mb * 1024 * 1024 / std::mem::size_of::<TTEntry>()).next_power_of_two() / 2;
+        TT { table: vec![TTEntry::default(); n.max(1024)], mask: n.max(1024) - 1 }
+    }
+    pub fn clear(&mut self) {
+        for e in self.table.iter_mut() {
+            *e = TTEntry::default();
+        }
+    }
+    #[inline]
+    fn probe(&self, key: u64) -> Option<TTEntry> {
+        let e = self.table[(key as usize) & self.mask];
+        if e.flag != 0 && e.key == key {
+            Some(e)
+        } else {
+            None
+        }
+    }
+    #[inline]
+    fn store(&mut self, key: u64, mv: Move, score: i32, depth: i32, flag: u8) {
+        let e = &mut self.table[(key as usize) & self.mask];
+        if e.key != key || depth as i8 >= e.depth || flag == 1 {
+            *e = TTEntry { key, mv, score, depth: depth as i8, flag };
+        }
+    }
+}
+
+pub struct Limits {
+    pub time_ms: Option<u64>,
+    pub depth: Option<i32>,
+    pub nodes: Option<u64>,
+}
+
+pub struct SearchResult {
+    pub best: Move,
+    pub score: i32,
+    pub depth: i32,
+    pub nodes: u64,
+}
+
+pub struct Searcher {
+    pub tt: TT,
+    nodes: u64,
+    start: Instant,
+    time_ms: Option<u64>,
+    node_limit: Option<u64>,
+    stopped: bool,
+    killers: [[Move; 2]; MAX_PLY + 1],
+    pub verbose: bool,
+}
+
+#[inline]
+fn score_to_tt(s: i32, ply: usize) -> i32 {
+    if s > MATE - 1000 {
+        s + ply as i32
+    } else if s < -MATE + 1000 {
+        s - ply as i32
+    } else {
+        s
+    }
+}
+#[inline]
+fn score_from_tt(s: i32, ply: usize) -> i32 {
+    if s > MATE - 1000 {
+        s - ply as i32
+    } else if s < -MATE + 1000 {
+        s + ply as i32
+    } else {
+        s
+    }
+}
+
+impl Searcher {
+    pub fn new(tt_mb: usize) -> Self {
+        Searcher {
+            tt: TT::new(tt_mb),
+            nodes: 0,
+            start: Instant::now(),
+            time_ms: None,
+            node_limit: None,
+            stopped: false,
+            killers: [[NO_MOVE; 2]; MAX_PLY + 1],
+            verbose: true,
+        }
+    }
+
+    #[inline]
+    fn check_stop(&mut self) {
+        if self.nodes & 1023 == 0 {
+            if let Some(t) = self.time_ms {
+                if self.start.elapsed().as_millis() as u64 >= t {
+                    self.stopped = true;
+                }
+            }
+        }
+        if let Some(n) = self.node_limit {
+            if self.nodes >= n {
+                self.stopped = true;
+            }
+        }
+    }
+
+    pub fn search(&mut self, pos: &mut Position, limits: &Limits) -> SearchResult {
+        self.start = Instant::now();
+        self.nodes = 0;
+        self.stopped = false;
+        self.time_ms = limits.time_ms;
+        self.node_limit = limits.nodes;
+        self.killers = [[NO_MOVE; 2]; MAX_PLY + 1];
+        let max_depth = limits.depth.unwrap_or(64).min(MAX_PLY as i32 - 10);
+
+        let legal = pos.legal_moves();
+        let mut best = legal.first().copied().unwrap_or(NO_MOVE);
+        let mut best_score = -INF;
+        let mut done_depth = 0;
+        if legal.len() <= 1 {
+            return SearchResult { best, score: 0, depth: 0, nodes: 0 };
+        }
+        for depth in 1..=max_depth {
+            let score = self.negamax(pos, depth, 0, -INF, INF, true);
+            if self.stopped && depth > 1 {
+                break;
+            }
+            if let Some(e) = self.tt.probe(pos.key()) {
+                if e.mv != NO_MOVE {
+                    best = e.mv;
+                }
+            }
+            best_score = score;
+            done_depth = depth;
+            if self.verbose {
+                let ms = self.start.elapsed().as_millis() as u64;
+                let sc = if score.abs() > MATE - 1000 {
+                    let plies = MATE - score.abs();
+                    format!("mate {}", if score > 0 { plies } else { -plies })
+                } else {
+                    format!("cp {}", score)
+                };
+                println!(
+                    "info depth {} score {} nodes {} nps {} time {} pv {}",
+                    depth,
+                    sc,
+                    self.nodes,
+                    self.nodes * 1000 / ms.max(1),
+                    ms,
+                    move_to_usi(best)
+                );
+            }
+            if score.abs() > MATE - 1000 {
+                break;
+            }
+            // 次の反復が終わりそうになければ打ち切る
+            if let Some(t) = self.time_ms {
+                if self.start.elapsed().as_millis() as u64 * 2 > t {
+                    break;
+                }
+            }
+        }
+        SearchResult { best, score: best_score, depth: done_depth, nodes: self.nodes }
+    }
+
+    fn order_moves(&self, pos: &Position, moves: &mut [Move], tt_move: Move, ply: usize) {
+        let mut scored: Vec<(i32, Move)> = moves
+            .iter()
+            .map(|&m| {
+                let s = if m == tt_move {
+                    1_000_000
+                } else if !mv_is_drop(m) && pos.board[mv_to(m)] != EMPTY {
+                    let victim = PIECE_VALUE[ptype(pos.board[mv_to(m)]) as usize];
+                    let attacker = PIECE_VALUE[ptype(pos.board[mv_from(m)]) as usize];
+                    100_000 + victim * 10 - attacker / 10
+                } else if mv_is_promo(m) {
+                    90_000
+                } else if ply <= MAX_PLY && (self.killers[ply][0] == m || self.killers[ply][1] == m) {
+                    80_000
+                } else {
+                    0
+                };
+                (s, m)
+            })
+            .collect();
+        scored.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        for (i, (_, m)) in scored.into_iter().enumerate() {
+            moves[i] = m;
+        }
+    }
+
+    /// 疑似合法手を指して、合法なら true（不合法なら戻して false）
+    #[inline]
+    fn try_move(&mut self, pos: &mut Position, m: Move) -> bool {
+        if mv_is_drop(m) && mv_drop_pt(m) == PAWN {
+            if !pos.is_legal(m) {
+                return false;
+            }
+            pos.do_move(m);
+            return true;
+        }
+        let us = pos.side;
+        pos.do_move(m);
+        if pos.is_attacked(pos.king_sq[us], us ^ 1) {
+            pos.undo_move();
+            return false;
+        }
+        true
+    }
+
+    fn negamax(&mut self, pos: &mut Position, depth: i32, ply: usize, mut alpha: i32, beta: i32, _pv: bool) -> i32 {
+        if depth <= 0 {
+            return self.qsearch(pos, ply, alpha, beta, 0);
+        }
+        self.nodes += 1;
+        self.check_stop();
+        if self.stopped {
+            return 0;
+        }
+        if ply > 0 && pos.repetition_count() >= 1 {
+            return 0;
+        }
+        if ply >= MAX_PLY - 1 {
+            return evaluate(pos);
+        }
+        let key = pos.key();
+        let mut tt_move = NO_MOVE;
+        if let Some(e) = self.tt.probe(key) {
+            tt_move = e.mv;
+            if ply > 0 && e.depth as i32 >= depth {
+                let s = score_from_tt(e.score, ply);
+                match e.flag {
+                    1 => return s,
+                    2 if s >= beta => return s,
+                    3 if s <= alpha => return s,
+                    _ => {}
+                }
+            }
+        }
+        let in_check = pos.in_check();
+        let depth = if in_check { depth + 1 } else { depth };
+
+        let mut moves = Vec::with_capacity(160);
+        pos.pseudo_moves(&mut moves, false);
+        self.order_moves(pos, &mut moves, tt_move, ply);
+
+        let orig_alpha = alpha;
+        let mut best_score = -INF;
+        let mut best_move = NO_MOVE;
+        let mut legal = 0;
+        for &m in moves.iter() {
+            if !self.try_move(pos, m) {
+                continue;
+            }
+            legal += 1;
+            let score = -self.negamax(pos, depth - 1, ply + 1, -beta, -alpha, false);
+            pos.undo_move();
+            if self.stopped {
+                return 0;
+            }
+            if score > best_score {
+                best_score = score;
+                best_move = m;
+                if score > alpha {
+                    alpha = score;
+                    if alpha >= beta {
+                        let quiet = mv_is_drop(m) || pos.board[mv_to(m)] == EMPTY;
+                        if quiet && self.killers[ply][0] != m {
+                            self.killers[ply][1] = self.killers[ply][0];
+                            self.killers[ply][0] = m;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        if legal == 0 {
+            // 詰み（将棋では手がない＝負け）
+            return -MATE + ply as i32;
+        }
+        let flag = if best_score >= beta {
+            2
+        } else if best_score > orig_alpha {
+            1
+        } else {
+            3
+        };
+        self.tt.store(key, best_move, score_to_tt(best_score, ply), depth, flag);
+        best_score
+    }
+
+    fn qsearch(&mut self, pos: &mut Position, ply: usize, mut alpha: i32, beta: i32, qdepth: i32) -> i32 {
+        self.nodes += 1;
+        self.check_stop();
+        if self.stopped {
+            return 0;
+        }
+        if ply >= MAX_PLY - 1 {
+            return evaluate(pos);
+        }
+        let in_check = qdepth < 4 && pos.in_check();
+        let mut best = -INF;
+        if !in_check {
+            let stand = evaluate(pos);
+            if stand >= beta {
+                return stand;
+            }
+            if stand > alpha {
+                alpha = stand;
+            }
+            best = stand;
+        }
+        let mut moves = Vec::with_capacity(64);
+        pos.pseudo_moves(&mut moves, !in_check);
+        self.order_moves(pos, &mut moves, NO_MOVE, MAX_PLY);
+        let mut legal = 0;
+        for &m in moves.iter() {
+            if !self.try_move(pos, m) {
+                continue;
+            }
+            legal += 1;
+            let score = -self.qsearch(pos, ply + 1, -beta, -alpha, qdepth + 1);
+            pos.undo_move();
+            if self.stopped {
+                return 0;
+            }
+            if score > best {
+                best = score;
+                if score > alpha {
+                    alpha = score;
+                    if alpha >= beta {
+                        break;
+                    }
+                }
+            }
+        }
+        if in_check && legal == 0 {
+            return -MATE + ply as i32;
+        }
+        best
+    }
+}
