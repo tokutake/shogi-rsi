@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="ja">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>shogi-rsi — 人間 vs AI</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: system-ui, sans-serif;
+      color: #292c26;
+      background: #f3f1e9;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 28px 16px;
+    }
+    main {
+      max-width: 1000px;
+      margin: auto;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    h1 {
+      font-size: 28px;
+      margin: 0;
+    }
+    small,
+    .muted {
+      color: #6d7164;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 580px) 1fr;
+      gap: 28px;
+      margin-top: 24px;
+    }
+    .panel {
+      background: #fffdf7;
+      border: 1px solid #dcded2;
+      border-radius: 16px;
+      padding: 20px;
+    }
+    button,
+    select {
+      font: inherit;
+    }
+    button {
+      cursor: pointer;
+    }
+    button:disabled {
+      cursor: default;
+      opacity: 0.5;
+    }
+    .controls {
+      display: grid;
+      gap: 14px;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+    }
+    select,
+    .action {
+      padding: 10px 12px;
+      border: 1px solid #cbd0bf;
+      border-radius: 8px;
+      background: white;
+    }
+    .primary {
+      background: #36583e;
+      color: white;
+      border: 0;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .hand {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      min-height: 42px;
+      align-items: center;
+      margin: 8px 0;
+    }
+    .hand button {
+      padding: 6px 10px;
+      border: 1px solid #c8bc98;
+      border-radius: 6px;
+      background: #eee0b9;
+    }
+    .hand button.selected {
+      outline: 3px solid #527b57;
+    }
+    .board {
+      display: grid;
+      grid-template-columns: repeat(9, 1fr);
+      grid-template-rows: repeat(9, 1fr);
+      border: 2px solid #786443;
+      background: #bda67e;
+      width: 100%;
+      aspect-ratio: 1;
+    }
+    .square {
+      position: relative;
+      border: 0;
+      border-right: 1px solid #a99167;
+      border-bottom: 1px solid #a99167;
+      background: #ead3a4;
+      padding: 0;
+      color: #27251f;
+      font-family: serif;
+      font-weight: 700;
+      font-size: clamp(21px, 4vw, 35px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .square.selected {
+      background: #c6d6a4;
+    }
+    .square.last {
+      background: #e8c47e;
+    }
+    .square.target:after {
+      content: "";
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #436646aa;
+      bottom: 4px;
+      right: 4px;
+    }
+    .piece.enemy {
+      transform: rotate(180deg);
+    }
+    .piece.promoted {
+      color: #ad3c30;
+    }
+    .coords {
+      display: flex;
+      justify-content: space-around;
+      font-size: 12px;
+      color: #71664e;
+      padding: 4px;
+    }
+    #status {
+      font-size: 18px;
+      font-weight: 600;
+      min-height: 28px;
+    }
+    #error {
+      color: #a92f26;
+      min-height: 20px;
+      margin: 8px 0;
+    }
+    #history {
+      max-height: 240px;
+      overflow: auto;
+      font-size: 14px;
+      line-height: 1.9;
+      white-space: pre-wrap;
+    }
+    dialog {
+      border: 1px solid #cbd0bf;
+      border-radius: 14px;
+      padding: 24px;
+      box-shadow: 0 16px 60px #0003;
+    }
+    dialog::backdrop {
+      background: #0005;
+    }
+    footer {
+      margin-top: 20px;
+      font-size: 12px;
+      color: #757969;
+    }
+    @media (max-width: 720px) {
+      body {
+        padding: 18px 10px;
+      }
+      .layout {
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+      .panel {
+        padding: 14px;
+      }
+      h1 {
+        font-size: 23px;
+      }
+      .square {
+        font-size: clamp(23px, 6vw, 34px);
+      }
+    }
+  </style>
+  <main>
+    <header>
+      <div>
+        <small>SHOGI RSI</small>
+        <h1>人間 vs AI</h1>
+      </div>
+      <small>ローカル対局</small>
+    </header>
+    <div class="layout">
+      <section class="panel" aria-label="将棋盤">
+        <div class="muted" id="opponentLabel">AIの持ち駒</div>
+        <div class="hand" id="opponentHand"></div>
+        <div class="coords" id="coords"></div>
+        <div class="board" id="board" aria-label="盤面"></div>
+        <div class="hand" id="humanHand"></div>
+        <div class="muted" id="humanLabel">あなたの持ち駒</div>
+      </section>
+      <aside class="panel">
+        <div id="status" role="status" aria-live="polite">準備中…</div>
+        <div id="error" role="alert"></div>
+        <div class="controls">
+          <label>
+            あなたの手番
+            <select id="side">
+              <option value="0">先手（最初に指す）</option>
+              <option value="1">後手（AIが最初に指す）</option>
+            </select>
+          </label>
+          <label>
+            AIの思考時間
+            <select id="time">
+              <option value="300">0.3秒</option>
+              <option value="1000" selected>1秒</option>
+              <option value="3000">3秒</option>
+            </select>
+          </label>
+          <div class="actions">
+            <button class="action primary" id="new">新しい対局</button>
+            <button class="action" id="undo">待った</button>
+            <button class="action" id="resign">投了</button>
+          </div>
+          <p class="muted">
+            駒を選んで、印のある移動先をクリック。持ち駒もクリックして打てます。手番の変更は「新しい対局」で反映されます。
+          </p>
+          <div>
+            <strong>棋譜</strong>
+            <div id="history">まだ指し手はありません</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+    <footer>
+      千日手・320手は引き分け。連続王手の千日手の反則判定と入玉宣言は未対応。棋譜はこのページを開いている間保持されます。
+    </footer>
+  </main>
+  <dialog id="promotion">
+    <p>この駒を成りますか？</p>
+    <div class="actions">
+      <button class="action primary" id="promote">成る</button>
+      <button class="action" id="plain">成らない</button>
+      <button class="action" id="cancel">戻る</button>
+    </div>
+  </dialog>
+  <script>
+    "use strict";
+    const $ = (id) => document.getElementById(id);
+    const names = [
+      "",
+      "歩",
+      "香",
+      "桂",
+      "銀",
+      "金",
+      "角",
+      "飛",
+      "玉",
+      "と",
+      "杏",
+      "圭",
+      "全",
+      "馬",
+      "龍",
+    ];
+    const dropNames = ["", "P", "L", "N", "S", "G", "B", "R"];
+    let game = null,
+      human = 0,
+      busy = false,
+      selected = null,
+      resigned = false,
+      pending = [];
+    const squareName = (i) =>
+      `${9 - (i % 9)}${String.fromCharCode(97 + Math.floor(i / 9))}`;
+    const sqIndex = (s) => (s.charCodeAt(1) - 97) * 9 + 9 - Number(s[0]);
+    function candidates() {
+      if (!selected || !game) return [];
+      return game.legal.filter((m) =>
+        selected.drop
+          ? m.startsWith(dropNames[selected.drop] + "*")
+          : m.startsWith(squareName(selected.square)),
+      );
+    }
+    function render() {
+      for (const id of ["new", "side", "time"]) $(id).disabled = busy;
+      if (!game) {
+        $("undo").disabled = true;
+        $("resign").disabled = true;
+        $("status").textContent = busy
+          ? "準備中…"
+          : "新しい対局で再試行できます";
+        return;
+      }
+      const active = !busy && !resigned && !game.result && game.side === human;
+      const choices = candidates(),
+        targets = new Set(choices.map((m) => sqIndex(m.slice(2, 4))));
+      const last = game.moves.at(-1),
+        lastTo = last ? sqIndex(last.slice(2, 4)) : -1;
+      $("board").replaceChildren();
+      $("coords").replaceChildren();
+      for (let c = 0; c < 9; c++) {
+        const e = document.createElement("span");
+        e.textContent = human === 0 ? 9 - c : c + 1;
+        $("coords").append(e);
+      }
+      for (let v = 0; v < 81; v++) {
+        const i = human === 0 ? v : 80 - v,
+          p = game.board[i],
+          pt = p & 15,
+          owner = p >> 4;
+        const b = document.createElement("button");
+        b.className = "square";
+        b.type = "button";
+        if (i === lastTo) b.classList.add("last");
+        if (selected?.square === i) b.classList.add("selected");
+        if (active && targets.has(i)) b.classList.add("target");
+        const span = document.createElement("span");
+        span.className =
+          "piece" +
+          (p && owner !== human ? " enemy" : "") +
+          (pt >= 9 ? " promoted" : "");
+        span.textContent = names[pt];
+        b.append(span);
+        b.setAttribute(
+          "aria-label",
+          `${9 - (i % 9)}筋${Math.floor(i / 9) + 1}段 ${p ? (owner === human ? "あなたの" : "AIの") + names[pt] : "空き"}`,
+        );
+        b.disabled = !active;
+        b.onclick = () => clickSquare(i);
+        $("board").append(b);
+      }
+      for (const [id, owner] of [
+        ["humanHand", human],
+        ["opponentHand", human ^ 1],
+      ]) {
+        $(id).replaceChildren();
+        let count = 0;
+        for (let pt = 7; pt >= 1; pt--) {
+          const n = game.hands[owner][pt];
+          if (!n) continue;
+          count += n;
+          const b = document.createElement("button");
+          b.textContent = names[pt] + " ×" + n;
+          b.disabled = owner !== human || !active;
+          b.className = selected?.drop === pt ? "selected" : "";
+          b.onclick = () => {
+            selected = selected?.drop === pt ? null : { drop: pt };
+            render();
+          };
+          $(id).append(b);
+        }
+        if (!count) {
+          const e = document.createElement("small");
+          e.textContent = "なし";
+          $(id).append(e);
+        }
+      }
+      $("status").textContent = busy
+        ? "AIが考えています…"
+        : resigned
+          ? "あなたの投了 — AIの勝ち"
+          : game.result ||
+            (game.side === human ? "あなたの番です" : "AIの番です") +
+              (game.check ? "（王手）" : "");
+      $("humanLabel").textContent =
+        `あなたの持ち駒（${human === 0 ? "先手" : "後手"}）`;
+      $("opponentLabel").textContent =
+        `AIの持ち駒（${human === 0 ? "後手" : "先手"}）`;
+      $("undo").disabled = busy || !game.moves.length;
+      $("resign").disabled = !active;
+      $("history").textContent = game.moves.length
+        ? game.moves
+            .map(
+              (m, i) => `${i + 1}. ${i % 2 === 0 ? "☗" : "☖"} ${notation(m)}`,
+            )
+            .join("\n")
+        : "まだ指し手はありません";
+      $("history").scrollTop = $("history").scrollHeight;
+    }
+    function notation(m) {
+      const dest = m.slice(2, 4);
+      const loc = `${dest[0]}${"一二三四五六七八九"[dest.charCodeAt(1) - 97]}`;
+      return m[1] === "*"
+        ? `${loc}${names[dropNames.indexOf(m[0])]}打`
+        : `${loc}（${m.slice(0, 2)}から）${m.endsWith("+") ? "成" : ""}`;
+    }
+    function clickSquare(i) {
+      const choices = candidates().filter((m) => sqIndex(m.slice(2, 4)) === i);
+      if (choices.length === 2) {
+        pending = choices;
+        $("promotion").showModal();
+        return;
+      }
+      if (choices.length === 1) {
+        submitMove(choices[0]);
+        return;
+      }
+      const p = game.board[i];
+      selected =
+        p && p >> 4 === human
+          ? selected?.square === i
+            ? null
+            : { square: i }
+          : null;
+      render();
+    }
+    for (const [id, promo] of [
+      ["promote", true],
+      ["plain", false],
+    ])
+      $(id).onclick = () => {
+        const m = pending.find((m) => m.endsWith("+") === promo);
+        $("promotion").close();
+        if (m) submitMove(m);
+      };
+    $("cancel").onclick = () => $("promotion").close();
+    async function request(moves, action = "play", nextHuman = human) {
+      if (busy) return false;
+      busy = true;
+      selected = null;
+      $("error").textContent = "";
+      render();
+      try {
+        const response = await fetch("/api/game", {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: `${nextHuman} ${$("time").value} ${action} ${moves.join(" ")}`,
+        });
+        if (!response.ok) throw new Error("対局データを処理できませんでした");
+        const next = await response.json();
+        game = next;
+        human = nextHuman;
+        resigned = false;
+        return true;
+      } catch (e) {
+        $("error").textContent =
+          `${e.message}。サーバーの起動を確認して再試行してください。`;
+        return false;
+      } finally {
+        busy = false;
+        render();
+      }
+    }
+    function submitMove(m) {
+      request([...game.moves, m]);
+    }
+    $("new").onclick = () => request([], "play", Number($("side").value));
+    $("undo").onclick = () => {
+      let moves = game.moves.slice();
+      do {
+        moves.pop();
+      } while (moves.length && moves.length % 2 !== human);
+      request(moves);
+    };
+    $("resign").onclick = () => {
+      resigned = true;
+      selected = null;
+      render();
+    };
+    request([]);
+  </script>
+</html>
