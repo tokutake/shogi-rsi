@@ -71,6 +71,7 @@ pub struct Searcher {
     node_limit: Option<u64>,
     stopped: bool,
     killers: [[Move; 2]; MAX_PLY + 1],
+    history: Vec<i32>, // [piece(32)][to(81)]
     pub verbose: bool,
 }
 
@@ -105,6 +106,7 @@ impl Searcher {
             node_limit: None,
             stopped: false,
             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
+            history: vec![0; 32 * 81],
             verbose: true,
         }
     }
@@ -132,6 +134,9 @@ impl Searcher {
         self.time_ms = limits.time_ms;
         self.node_limit = limits.nodes;
         self.killers = [[NO_MOVE; 2]; MAX_PLY + 1];
+        for h in self.history.iter_mut() {
+            *h /= 8;
+        }
         let max_depth = limits.depth.unwrap_or(64).min(MAX_PLY as i32 - 10);
 
         let legal = pos.legal_moves();
@@ -199,7 +204,7 @@ impl Searcher {
                 } else if ply <= MAX_PLY && (self.killers[ply][0] == m || self.killers[ply][1] == m) {
                     80_000
                 } else {
-                    0
+                    self.history[Self::hist_idx(pos, m)].min(70_000)
                 };
                 (s, m)
             })
@@ -208,6 +213,12 @@ impl Searcher {
         for (i, (_, m)) in scored.into_iter().enumerate() {
             moves[i] = m;
         }
+    }
+
+    #[inline]
+    fn hist_idx(pos: &Position, m: Move) -> usize {
+        let p = if mv_is_drop(m) { make_piece(pos.side, mv_drop_pt(m)) } else { pos.board[mv_from(m)] };
+        p as usize * 81 + mv_to(m)
     }
 
     /// 疑似合法手を指して、合法なら true（不合法なら戻して false）
@@ -229,7 +240,7 @@ impl Searcher {
         true
     }
 
-    fn negamax(&mut self, pos: &mut Position, depth: i32, ply: usize, mut alpha: i32, beta: i32, _pv: bool) -> i32 {
+    fn negamax(&mut self, pos: &mut Position, depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
         if depth <= 0 {
             return self.qsearch(pos, ply, alpha, beta, 0);
         }
@@ -248,7 +259,7 @@ impl Searcher {
         let mut tt_move = NO_MOVE;
         if let Some(e) = self.tt.probe(key) {
             tt_move = e.mv;
-            if ply > 0 && e.depth as i32 >= depth {
+            if !pv && ply > 0 && e.depth as i32 >= depth {
                 let s = score_from_tt(e.score, ply);
                 match e.flag {
                     1 => return s,
@@ -261,6 +272,23 @@ impl Searcher {
         let in_check = pos.in_check();
         let depth = if in_check { depth + 1 } else { depth };
 
+        // Null move pruning
+        if !pv && !in_check && depth >= 3 && ply > 0 && beta.abs() < MATE - 1000 && pos.last_move() != NO_MOVE {
+            let static_eval = evaluate(pos);
+            if static_eval >= beta {
+                let r = 2 + depth / 4;
+                pos.do_null_move();
+                let score = -self.negamax(pos, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
+                pos.undo_null_move();
+                if self.stopped {
+                    return 0;
+                }
+                if score >= beta {
+                    return if score > MATE - 1000 { beta } else { score };
+                }
+            }
+        }
+
         let mut moves = Vec::with_capacity(160);
         pos.pseudo_moves(&mut moves, false);
         self.order_moves(pos, &mut moves, tt_move, ply);
@@ -269,12 +297,35 @@ impl Searcher {
         let mut best_score = -INF;
         let mut best_move = NO_MOVE;
         let mut legal = 0;
+        let mut quiets_tried: Vec<Move> = Vec::new();
         for &m in moves.iter() {
+            let quiet = !mv_is_promo(m) && (mv_is_drop(m) || pos.board[mv_to(m)] == EMPTY);
+            let hidx = Self::hist_idx(pos, m);
             if !self.try_move(pos, m) {
                 continue;
             }
             legal += 1;
-            let score = -self.negamax(pos, depth - 1, ply + 1, -beta, -alpha, false);
+            let gives_check = pos.in_check();
+            let mut score;
+            if legal == 1 {
+                score = -self.negamax(pos, depth - 1, ply + 1, -beta, -alpha, pv);
+            } else {
+                // Late move reduction
+                let mut r = 0;
+                if depth >= 3 && quiet && !in_check && !gives_check && legal > 3 {
+                    r = 1 + (legal > 8) as i32 + (depth >= 8) as i32;
+                    if pv {
+                        r -= 1;
+                    }
+                }
+                score = -self.negamax(pos, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
+                if score > alpha && r > 0 {
+                    score = -self.negamax(pos, depth - 1, ply + 1, -alpha - 1, -alpha, false);
+                }
+                if score > alpha && score < beta && pv {
+                    score = -self.negamax(pos, depth - 1, ply + 1, -beta, -alpha, true);
+                }
+            }
             pos.undo_move();
             if self.stopped {
                 return 0;
@@ -285,14 +336,23 @@ impl Searcher {
                 if score > alpha {
                     alpha = score;
                     if alpha >= beta {
-                        let quiet = mv_is_drop(m) || pos.board[mv_to(m)] == EMPTY;
-                        if quiet && self.killers[ply][0] != m {
-                            self.killers[ply][1] = self.killers[ply][0];
-                            self.killers[ply][0] = m;
+                        if quiet {
+                            if self.killers[ply][0] != m {
+                                self.killers[ply][1] = self.killers[ply][0];
+                                self.killers[ply][0] = m;
+                            }
+                            self.history[hidx] += depth * depth;
+                            for &q in quiets_tried.iter() {
+                                let qi = Self::hist_idx(pos, q);
+                                self.history[qi] -= depth * depth / 2;
+                            }
                         }
                         break;
                     }
                 }
+            }
+            if quiet {
+                quiets_tried.push(m);
             }
         }
         if legal == 0 {

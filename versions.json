@@ -1,0 +1,10 @@
+[
+  {
+    "number": 1,
+    "name": "ayame",
+    "commit": "3a67f363d469338255f7f39d503bd22d0976a3a2",
+    "parent": null,
+    "created": "2026-10-04T05:15:36Z",
+    "description": "初版: 駒得のみの評価 + αβ/静止探索/置換表/キラー"
+  }
+]
