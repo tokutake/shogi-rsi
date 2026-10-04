@@ -147,7 +147,28 @@ impl Searcher {
             return SearchResult { best, score: 0, depth: 0, nodes: 0 };
         }
         for depth in 1..=max_depth {
-            let score = self.negamax(pos, depth, 0, -INF, INF, true);
+            // Aspiration window: 前回の評価値の周辺の窓で探索し、外れたら窓を広げて再探索
+            let mut delta = 60;
+            let (mut lo, mut hi) = if depth >= 4 && best_score.abs() < MATE - 1000 {
+                (best_score - delta, best_score + delta)
+            } else {
+                (-INF, INF)
+            };
+            let mut score;
+            loop {
+                score = self.negamax(pos, depth, 0, lo, hi, true);
+                if self.stopped {
+                    break;
+                }
+                if score <= lo {
+                    lo = (lo - delta).max(-INF);
+                } else if score >= hi {
+                    hi = (hi + delta).min(INF);
+                } else {
+                    break;
+                }
+                delta *= 2;
+            }
             if self.stopped && depth > 1 {
                 break;
             }
@@ -312,6 +333,13 @@ impl Searcher {
             }
             legal += 1;
             let gives_check = pos.in_check();
+            // Late move pruning: 浅い深さで後半の静かな手は読まない
+            if !pv && !in_check && !gives_check && quiet && depth <= 3 && legal > 8 + 4 * depth * depth
+                && best_score > -MATE + 1000
+            {
+                pos.undo_move();
+                continue;
+            }
             // Futility pruning: 浅い深さで静的評価が alpha に遠く届かない静かな手は読まない
             if !pv && !in_check && !gives_check && quiet && depth <= 2 && legal > 1
                 && alpha.abs() < MATE - 1000 && static_eval + 120 * depth <= alpha
@@ -326,7 +354,8 @@ impl Searcher {
                 // Late move reduction
                 let mut r = 0;
                 if depth >= 3 && quiet && !in_check && !gives_check && legal > 3 {
-                    r = 1 + (legal > 8) as i32 + (depth >= 8) as i32;
+                    r = (0.75 + (depth as f64).ln() * (legal as f64).ln() / 2.25) as i32;
+                    r = r.clamp(1, depth - 2);
                     if pv {
                         r -= 1;
                     }
