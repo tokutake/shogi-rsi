@@ -6,5 +6,13 @@
     "parent": null,
     "created": "2026-10-04T05:15:36Z",
     "description": "初版: 駒得のみの評価 + αβ/静止探索/置換表/キラー"
+  },
+  {
+    "number": 2,
+    "name": "botan",
+    "commit": "8599dbcebfe3f10a17a7203dbca47523d2c75668",
+    "parent": "v1-ayame",
+    "created": "2026-10-04T05:19:33Z",
+    "description": "探索強化: PVS / null move / LMR / history"
   }
 ]
