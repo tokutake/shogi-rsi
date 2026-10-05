@@ -6,6 +6,7 @@ mod position;
 mod search;
 mod tune;
 mod usi;
+mod web;
 
 use position::*;
 
@@ -16,6 +17,13 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(|s| s.as_str()) {
+        Some("web") => {
+            let port = arg_value(&args, "--port").and_then(|v| v.parse().ok()).unwrap_or(8080);
+            if let Err(e) = web::serve(port) {
+                eprintln!("Web server: {}", e);
+                std::process::exit(1);
+            }
+        }
         Some("perft") => {
             let d: u32 = args[2].parse().unwrap();
             let mut pos = if args.len() > 3 {
