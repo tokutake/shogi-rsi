@@ -7,6 +7,9 @@ edition = "2021"
 name = "shogi-rsi"
 path = "src/main.rs"
 
+[lib]
+crate-type = ["cdylib"]
+
 [dependencies]
 
 [profile.release]

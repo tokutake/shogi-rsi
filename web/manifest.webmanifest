@@ -1,0 +1,14 @@
+{
+  "name": "shogi-rsi — 人間 vs AI",
+  "short_name": "将棋RSI",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f1e9",
+  "theme_color": "#36583e",
+  "icons": [
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
