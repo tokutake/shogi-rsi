@@ -46,5 +46,21 @@
     "parent": "v5-enoki",
     "created": "2026-10-04T06:26:24Z",
     "description": "探索: Late move pruning + 対数式LMR + Aspiration window"
+  },
+  {
+    "number": 7,
+    "name": "ginga",
+    "commit": "20d9469c0e4d2efa60b8f26bb78a1acd5b0dc13d",
+    "parent": "v6-fuji",
+    "created": "2026-10-06T01:23:46Z",
+    "description": "評価: PST + 玉相対の駒位置(KP)特徴量を、探索スコア(深さ5)教師の回帰で学習"
+  },
+  {
+    "number": 8,
+    "name": "hayate",
+    "commit": "9b2db9782b6b8398528eada63e5fc1e2fab464f1",
+    "parent": "v7-ginga",
+    "created": "2026-10-06T02:18:37Z",
+    "description": "評価: v7自己対局を加え、v7探索スコアで再ラベルして再学習"
   }
 ]

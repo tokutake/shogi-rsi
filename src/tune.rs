@@ -19,6 +19,28 @@ fn json_str<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     Some(&line[i..j])
 }
 
+fn load_labels(paths: &[String], lambda: f64) -> Vec<Sample> {
+    let mut out = Vec::new();
+    for path in paths {
+        let Ok(text) = std::fs::read_to_string(path) else { continue };
+        for line in text.lines() {
+            let mut it = line.split('|');
+            let (Some(sfen), Some(sc), Some(res)) = (it.next(), it.next(), it.next()) else { continue };
+            let (Ok(sc), Ok(res)) = (sc.parse::<f64>(), res.parse::<f64>()) else { continue };
+            let Some(pos) = Position::from_sfen(sfen) else { continue };
+            let sc_black = if pos.side == BLACK { sc } else { -sc };
+            let t = lambda * res + (1.0 - lambda) * sigmoid(sc_black * 0.004);
+            let mut feats: Vec<(u16, i16)> = Vec::with_capacity(128);
+            eval_terms(&pos, |c, idx, n| {
+                let v = if c == BLACK { n } else { -n };
+                feats.push((idx as u16, v as i16));
+            });
+            out.push(Sample { feats, result: t });
+        }
+    }
+    out
+}
+
 fn load_samples(paths: &[String], min_ply: usize) -> Vec<Sample> {
     let mut out = Vec::new();
     for path in paths {
@@ -89,6 +111,9 @@ fn loss(params: &[f64], data: &[Sample], k: f64) -> f64 {
 
 pub fn run_tune(args: &[String]) {
     let mut data_paths = Vec::new();
+    let mut label_paths = Vec::new();
+    let mut lambda = 0.3;
+    let mut fixed_k: Option<f64> = None;
     let mut epochs = 300;
     let mut out = "src/params.rs".to_string();
     let mut lr = 0.5;
@@ -98,6 +123,9 @@ pub fn run_tune(args: &[String]) {
     while i < args.len() {
         match args[i].as_str() {
             "--data" => data_paths.push(args[i + 1].clone()),
+            "--labels" => label_paths.push(args[i + 1].clone()),
+            "--lambda" => lambda = args[i + 1].parse().unwrap(),
+            "--k" => fixed_k = Some(args[i + 1].parse().unwrap()),
             "--epochs" => epochs = args[i + 1].parse().unwrap(),
             "--out" => out = args[i + 1].clone(),
             "--lr" => lr = args[i + 1].parse().unwrap(),
@@ -110,7 +138,8 @@ pub fn run_tune(args: &[String]) {
         }
         i += 2;
     }
-    let data = load_samples(&data_paths, min_ply);
+    let mut data = load_samples(&data_paths, min_ply);
+    data.extend(load_labels(&label_paths, lambda));
     eprintln!("samples: {}", data.len());
     if data.len() < 1000 {
         eprintln!("not enough samples");
@@ -140,7 +169,7 @@ pub fn run_tune(args: &[String]) {
             best_k = k;
         }
     }
-    let k = best_k;
+    let k = fixed_k.unwrap_or(best_k);
     eprintln!("K = {:.4}  train loss {:.6}  valid loss {:.6}", k, best_l, loss(&params, &valid, k));
 
     // 2. Adam で最適化（玉の価値・空マスは固定）
@@ -152,12 +181,31 @@ pub fn run_tune(args: &[String]) {
     let mut best_params = params.clone();
     for epoch in 1..=epochs {
         let mut grad = vec![0.0; NUM_PARAMS];
-        for s in train.iter() {
-            let p = predict(&params, s, k);
-            // d/dθ (r - p)^2 = -2 (r - p) p (1 - p) k x
-            let g = -2.0 * (s.result - p) * p * (1.0 - p) * k;
-            for &(i, x) in s.feats.iter() {
-                grad[i as usize] += g * x as f64;
+        let nth = 4;
+        let chunk = (train.len() + nth - 1) / nth;
+        let parts: Vec<Vec<f64>> = std::thread::scope(|sc| {
+            let hs: Vec<_> = train
+                .chunks(chunk)
+                .map(|ch| {
+                    let params = &params;
+                    sc.spawn(move || {
+                        let mut g = vec![0.0; NUM_PARAMS];
+                        for s in ch {
+                            let p = predict(params, s, k);
+                            let gg = -2.0 * (s.result - p) * p * (1.0 - p) * k;
+                            for &(i, x) in s.feats.iter() {
+                                g[i as usize] += gg * x as f64;
+                            }
+                        }
+                        g
+                    })
+                })
+                .collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for p in parts {
+            for i in 0..NUM_PARAMS {
+                grad[i] += p[i];
             }
         }
         let n = train.len() as f64;
@@ -199,15 +247,23 @@ fn write_params(path: &str, params: &[f64]) {
         ("ATK_PAWN", 68, 9),
         ("KING_RANK (自陣から見た段)", 77, 9),
         ("ATK_KL (香・桂)", 86, 9),
+        ("PST [駒種0..14][升81]", 95, 15 * 81),
+        ("KP_OWN [駒種0..14][自玉との相対17x17]", 95 + 15 * 81, 15 * 289),
+        ("KP_OPP [駒種0..14][敵玉との相対17x17]", 95 + 15 * 81 + 15 * 289, 15 * 289),
     ];
-    let mut s = String::from(
-        "//! 評価関数のパラメータ。`shogi-rsi tune` で自動生成・上書きされる。\n//! レイアウトは eval.rs の IDX_* を参照。\n\npub const P: [i32; 95] = [\n",
+    let mut s = format!(
+        "//! 評価関数のパラメータ。`shogi-rsi tune` で自動生成・上書きされる。\n//! レイアウトは eval.rs の IDX_* を参照。\n\npub const P: [i32; {}] = [\n",
+        params.len()
     );
     for (name, start, len) in names.iter() {
         s.push_str(&format!("    // {}\n    ", name));
-        let vals: Vec<String> = params[*start..start + len].iter().map(|v| format!("{}", v.round() as i32)).collect();
-        s.push_str(&vals.join(", "));
-        s.push_str(",\n");
+        for (k, v) in params[*start..start + len].iter().enumerate() {
+            if k > 0 && k % 17 == 0 {
+                s.push_str("\n    ");
+            }
+            s.push_str(&format!("{}, ", v.round() as i32));
+        }
+        s.push_str("\n");
     }
     s.push_str("];\n");
     std::fs::write(path, s).expect("write params");
