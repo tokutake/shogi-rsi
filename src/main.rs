@@ -20,7 +20,8 @@ fn main() {
     match args.get(1).map(|s| s.as_str()) {
         Some("web") => {
             let port = arg_value(&args, "--port").and_then(|v| v.parse().ok()).unwrap_or(8080);
-            if let Err(e) = web::serve(port) {
+            let lan = args.iter().any(|arg| arg == "--lan");
+            if let Err(e) = web::serve(port, lan) {
                 eprintln!("Web server: {}", e);
                 std::process::exit(1);
             }

@@ -2,7 +2,7 @@
 use crate::position::*;
 use crate::search::{Limits, Searcher};
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;
 
 const PAGE: &str = include_str!("../web/index.html");
@@ -105,6 +105,14 @@ fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &str) -> io::
     write!(stream, "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n{}", status, kind, body.len(), body)
 }
 
+// Accept the interface reached by this connection, never arbitrary Host names.
+// This also keeps the Host/origin checks effective when listening on the LAN.
+fn valid_host(host: &str, local: SocketAddr) -> bool {
+    host == format!("localhost:{}", local.port())
+        || host == format!("127.0.0.1:{}", local.port())
+        || host.parse::<SocketAddr>().ok() == Some(local)
+}
+
 fn handle(mut stream: TcpStream) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
@@ -139,8 +147,7 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
         .find(|(key, _)| key.eq_ignore_ascii_case("host"))
         .map(|(_, value)| value.trim())
         .unwrap_or("");
-    let port = stream.local_addr()?.port();
-    if host != format!("127.0.0.1:{}", port) && host != format!("localhost:{}", port) {
+    if !valid_host(host, stream.local_addr()?) {
         return respond(&mut stream, "403 Forbidden", "text/plain", "Invalid host");
     }
     if let Some((_, origin)) = headers
@@ -226,12 +233,17 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
     }
 }
 
-pub fn serve(port: u16) -> io::Result<()> {
-    let listener = TcpListener::bind(("127.0.0.1", port))?;
+pub fn serve(port: u16, lan: bool) -> io::Result<()> {
+    let listener = TcpListener::bind((if lan { "0.0.0.0" } else { "127.0.0.1" }, port))?;
+    let port = listener.local_addr()?.port();
     println!(
         "ブラウザで http://127.0.0.1:{}/ を開いてください（終了: Ctrl+C）",
         port
     );
+    if lan {
+        println!("iPad: 同じWi-Fiに接続し、Safariで http://<このPCのLAN IP>:{} を開いてください", port);
+        println!("LAN内の端末から接続できます。終了: Ctrl+C");
+    }
     // Sequential requests keep concurrent AI searches from exhausting memory/CPU.
     for stream in listener.incoming() {
         if let Err(e) = stream.and_then(handle) {
@@ -244,6 +256,18 @@ pub fn serve(port: u16) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn validates_lan_host() {
+        let local = "192.168.1.20:8080".parse().unwrap();
+        assert!(valid_host("192.168.1.20:8080", local));
+        assert!(valid_host("localhost:8080", local));
+        assert!(valid_host("127.0.0.1:8080", local));
+        assert!(!valid_host("192.168.1.21:8080", local));
+        assert!(!valid_host("192.168.1.20:8081", local));
+        assert!(!valid_host("example.com:8080", local));
+        assert!(!valid_host("192.168.1.20:8080@example.com", local));
+    }
+
     #[test]
     fn validates_moves_and_replies() {
         assert!(state("0 100 state 7g7f").unwrap().contains("\"side\":1"));
