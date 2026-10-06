@@ -54,5 +54,13 @@
     "parent": "v6-fuji",
     "created": "2026-10-06T01:23:46Z",
     "description": "評価: PST + 玉相対の駒位置(KP)特徴量を、探索スコア(深さ5)教師の回帰で学習"
+  },
+  {
+    "number": 8,
+    "name": "hayate",
+    "commit": "9b2db9782b6b8398528eada63e5fc1e2fab464f1",
+    "parent": "v7-ginga",
+    "created": "2026-10-06T02:18:37Z",
+    "description": "評価: v7自己対局を加え、v7探索スコアで再ラベルして再学習"
   }
 ]
