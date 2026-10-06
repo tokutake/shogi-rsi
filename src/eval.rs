@@ -17,7 +17,10 @@ pub const IDX_ATK_MAJOR: usize = 59;
 pub const IDX_ATK_PAWN: usize = 68;
 pub const IDX_KING_RANK: usize = 77;
 pub const IDX_ATK_KL: usize = 86;
-pub const NUM_PARAMS: usize = 95;
+pub const IDX_PST: usize = 95; // [駒種 1..14][自陣から見た升 81]
+pub const IDX_KP_OWN: usize = IDX_PST + 15 * 81; // [駒種 1..14][自玉との相対 17x17]
+pub const IDX_KP_OPP: usize = IDX_KP_OWN + 15 * 289; // [駒種 1..14][敵玉との相対 17x17]
+pub const NUM_PARAMS: usize = IDX_KP_OPP + 15 * 289;
 
 /// 指し手の並べ替え等で使う駒の価値
 pub const PIECE_VALUE: [i32; 15] = [
@@ -42,6 +45,9 @@ pub fn eval_terms<F: FnMut(Color, usize, i32)>(pos: &Position, mut f: F) {
         }
         let pt = ptype(p);
         let c = color_of(p);
+        // 自陣側から見た升（後手は 180 度回転）
+        let rsq = if c == BLACK { sq } else { 80 - sq };
+        f(c, IDX_PST + pt as usize * 81 + rsq, 1);
         if pt == KING {
             let r = sq / 9;
             let rel = if c == BLACK { 8 - r } else { r };
@@ -49,6 +55,18 @@ pub fn eval_terms<F: FnMut(Color, usize, i32)>(pos: &Position, mut f: F) {
             continue;
         }
         f(c, IDX_PIECE + pt as usize, 1);
+        {
+            let (mut dr, mut dc) = ((sq / 9) as i32 - (ksq[c] / 9) as i32, (sq % 9) as i32 - (ksq[c] % 9) as i32);
+            let (mut er, mut ec) = ((sq / 9) as i32 - (ksq[c ^ 1] / 9) as i32, (sq % 9) as i32 - (ksq[c ^ 1] % 9) as i32);
+            if c == WHITE {
+                dr = -dr;
+                dc = -dc;
+                er = -er;
+                ec = -ec;
+            }
+            f(c, IDX_KP_OWN + pt as usize * 289 + ((dr + 8) * 17 + dc + 8) as usize, 1);
+            f(c, IDX_KP_OPP + pt as usize * 289 + ((er + 8) * 17 + ec + 8) as usize, 1);
+        }
         let d_own = cheb(sq, ksq[c]);
         let d_opp = cheb(sq, ksq[c ^ 1]);
         match pt {
