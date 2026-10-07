@@ -225,7 +225,12 @@ impl Searcher {
                 } else if !mv_is_drop(m) && pos.board[mv_to(m)] != EMPTY {
                     let victim = PIECE_VALUE[ptype(pos.board[mv_to(m)]) as usize];
                     let attacker = PIECE_VALUE[ptype(pos.board[mv_from(m)]) as usize];
-                    100_000 + victim * 10 - attacker / 10
+                    if attacker > victim + 50 && pos.is_attacked(mv_to(m), pos.side ^ 1) {
+                        // 取り返される損な取りは静かな手の後ろに回す
+                        60_000 + victim - attacker / 10
+                    } else {
+                        100_000 + victim * 10 - attacker / 10
+                    }
                 } else if mv_is_promo(m) {
                     90_000
                 } else if ply <= MAX_PLY && (self.killers[ply][0] == m || self.killers[ply][1] == m) {
@@ -297,7 +302,11 @@ impl Searcher {
             }
         }
         let in_check = pos.in_check();
-        let depth = if in_check { depth + 1 } else { depth };
+        let mut depth = if in_check { depth + 1 } else { depth };
+        // Internal iterative reduction: TT 手がない深いノードは 1 浅く読む
+        if tt_move == NO_MOVE && depth >= 4 && !in_check {
+            depth -= 1;
+        }
 
         let static_eval = if in_check { -INF } else { evaluate(pos) };
 
@@ -367,6 +376,13 @@ impl Searcher {
                     if pv {
                         r -= 1;
                     }
+                    let h = self.history[hidx];
+                    if h > 2000 {
+                        r -= 1;
+                    } else if h < -500 {
+                        r += 1;
+                    }
+                    r = r.clamp(0, depth - 2);
                 }
                 score = -self.negamax(pos, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
                 if score > alpha && r > 0 {
