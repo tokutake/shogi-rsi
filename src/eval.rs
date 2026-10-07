@@ -20,7 +20,8 @@ pub const IDX_ATK_KL: usize = 86;
 pub const IDX_PST: usize = 95; // [駒種 1..14][自陣から見た升 81]
 pub const IDX_KP_OWN: usize = IDX_PST + 15 * 81; // [駒種 1..14][自玉との相対 17x17]
 pub const IDX_KP_OPP: usize = IDX_KP_OWN + 15 * 289; // [駒種 1..14][敵玉との相対 17x17]
-pub const NUM_PARAMS: usize = IDX_KP_OPP + 15 * 289;
+pub const IDX_TEMPO: usize = IDX_KP_OPP + 15 * 289; // 手番ボーナス
+pub const NUM_PARAMS: usize = IDX_TEMPO + 1;
 
 /// 指し手の並べ替え等で使う駒の価値
 pub const PIECE_VALUE: [i32; 15] = [
@@ -100,12 +101,18 @@ pub fn eval_terms<F: FnMut(Color, usize, i32)>(pos: &Position, mut f: F) {
             }
         }
     }
+    f(pos.side, IDX_TEMPO, 1);
 }
 
 /// 盤面全体から各手番の評価合計を計算する（Position が差分更新の初期値に使う）
+/// 手番ボーナスを含まない各色の評価合計
 pub fn compute_scores(pos: &Position) -> [i32; 2] {
     let mut score = [0i32; 2];
-    eval_terms(pos, |c, idx, n| score[c] += P[idx] * n);
+    eval_terms(pos, |c, idx, n| {
+        if idx != IDX_TEMPO {
+            score[c] += P[idx] * n;
+        }
+    });
     score
 }
 
@@ -125,5 +132,5 @@ pub fn hand_score(pt: usize) -> i32 {
 #[inline]
 pub fn evaluate(pos: &Position) -> i32 {
     let us = pos.side;
-    pos.eval[us] - pos.eval[us ^ 1]
+    pos.eval[us] - pos.eval[us ^ 1] + P[IDX_TEMPO]
 }
