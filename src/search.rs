@@ -311,16 +311,8 @@ impl Searcher {
         let static_eval = if in_check { -INF } else { evaluate(pos) };
 
         // Reverse futility pruning（静的評価が beta を大きく上回るなら打ち切り）
-        if !pv && !in_check && depth <= 4 && ply > 0 && beta.abs() < MATE - 1000 && static_eval - 130 * depth >= beta {
+        if !pv && !in_check && depth <= 3 && ply > 0 && beta.abs() < MATE - 1000 && static_eval - 150 * depth >= beta {
             return static_eval;
-        }
-
-        // Razoring: 静的評価が alpha を大きく下回る浅いノードは静止探索で確かめる
-        if !pv && !in_check && depth <= 2 && ply > 0 && alpha.abs() < MATE - 1000 && static_eval + 250 * depth <= alpha {
-            let v = self.qsearch(pos, ply, alpha, alpha + 1, 0);
-            if v <= alpha {
-                return v;
-            }
         }
 
         // Null move pruning
