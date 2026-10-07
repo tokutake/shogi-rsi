@@ -208,7 +208,7 @@ impl Searcher {
             }
             // 次の反復が終わりそうになければ打ち切る
             if let Some(t) = self.time_ms {
-                if self.start.elapsed().as_millis() as u64 * 2 > t {
+                if self.start.elapsed().as_millis() as u64 * 4 > t * 3 {
                     break;
                 }
             }
