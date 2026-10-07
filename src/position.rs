@@ -260,6 +260,7 @@ struct Undo {
     mv: Move,
     captured: u8,
     hash: u64,
+    eval: [i32; 2],
 }
 
 #[derive(Clone)]
@@ -270,6 +271,7 @@ pub struct Position {
     pub king_sq: [usize; 2],
     pub hash: u64,
     pub ply: usize, // 開始局面からの手数
+    pub eval: [i32; 2], // 各色の評価合計（do_move/undo_move で差分更新）
     history: Vec<Undo>,
 }
 
@@ -298,6 +300,7 @@ impl Position {
             king_sq: [81, 81],
             hash: 0,
             ply: 0,
+            eval: [0, 0],
             history: Vec::with_capacity(512),
         };
         let (mut r, mut c) = (0usize, 0usize);
@@ -363,6 +366,7 @@ impl Position {
             }
         }
         pos.hash = pos.compute_hash();
+        pos.eval = crate::eval::compute_scores(&pos);
         Some(pos)
     }
 
@@ -483,6 +487,8 @@ impl Position {
         let to = mv_to(m);
         let mut captured = EMPTY;
         let prev_hash = self.hash;
+        let prev_eval = self.eval;
+        let mut king_moved = false;
         if mv_is_drop(m) {
             let pt = mv_drop_pt(m);
             let n = self.hand[us][pt as usize] as usize;
@@ -491,13 +497,16 @@ impl Position {
             let p = make_piece(us, pt);
             self.board[to] = p;
             self.hash ^= z.board[p as usize][to];
+            self.eval[us] += crate::eval::piece_score(to, p, &self.king_sq) - crate::eval::hand_score(pt as usize);
         } else {
             let from = mv_from(m);
             let p = self.board[from];
             captured = self.board[to];
             if captured != EMPTY {
                 self.hash ^= z.board[captured as usize][to];
+                self.eval[us ^ 1] -= crate::eval::piece_score(to, captured, &self.king_sq);
                 let cpt = unpromote(ptype(captured)) as usize;
+                self.eval[us] += crate::eval::hand_score(cpt);
                 let n = self.hand[us][cpt] as usize;
                 self.hash ^= z.hand[us][cpt][n] ^ z.hand[us][cpt][n + 1];
                 self.hand[us][cpt] += 1;
@@ -509,12 +518,19 @@ impl Position {
             self.hash ^= z.board[np as usize][to];
             if ptype(p) == KING {
                 self.king_sq[us] = to;
+                king_moved = true;
+            }
+            if king_moved {
+                self.eval = crate::eval::compute_scores(self);
+            } else {
+                self.eval[us] += crate::eval::piece_score(to, np, &self.king_sq)
+                    - crate::eval::piece_score(from, p, &self.king_sq);
             }
         }
         self.hash ^= z.side;
         self.side ^= 1;
         self.ply += 1;
-        self.history.push(Undo { mv: m, captured, hash: prev_hash });
+        self.history.push(Undo { mv: m, captured, hash: prev_hash, eval: prev_eval });
     }
 
     pub fn undo_move(&mut self) {
@@ -542,6 +558,7 @@ impl Position {
             }
         }
         self.hash = u.hash;
+        self.eval = u.eval;
     }
 
     pub fn do_null_move(&mut self) {
@@ -549,7 +566,7 @@ impl Position {
         self.hash ^= zobrist().side;
         self.side ^= 1;
         self.ply += 1;
-        self.history.push(Undo { mv: NO_MOVE, captured: EMPTY, hash: prev });
+        self.history.push(Undo { mv: NO_MOVE, captured: EMPTY, hash: prev, eval: self.eval });
     }
 
     pub fn undo_null_move(&mut self) {

@@ -73,6 +73,9 @@ pub struct Searcher {
     killers: [[Move; 2]; MAX_PLY + 1],
     history: Vec<i32>, // [piece(32)][to(81)]
     pub verbose: bool,
+    scratch: Vec<(i32, Move)>,
+    move_bufs: Vec<Vec<Move>>,
+    quiet_bufs: Vec<Vec<Move>>,
 }
 
 #[inline]
@@ -108,6 +111,9 @@ impl Searcher {
             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
             history: vec![0; 32 * 81],
             verbose: true,
+            scratch: Vec::with_capacity(256),
+            move_bufs: vec![Vec::with_capacity(160); MAX_PLY + 2],
+            quiet_bufs: vec![Vec::with_capacity(64); MAX_PLY + 2],
         }
     }
 
@@ -202,7 +208,7 @@ impl Searcher {
             }
             // 次の反復が終わりそうになければ打ち切る
             if let Some(t) = self.time_ms {
-                if self.start.elapsed().as_millis() as u64 * 2 > t {
+                if self.start.elapsed().as_millis() as u64 * 4 > t * 3 {
                     break;
                 }
             }
@@ -210,16 +216,21 @@ impl Searcher {
         SearchResult { best, score: best_score, depth: done_depth, nodes: self.nodes }
     }
 
-    fn order_moves(&self, pos: &Position, moves: &mut [Move], tt_move: Move, ply: usize) {
-        let mut scored: Vec<(i32, Move)> = moves
-            .iter()
-            .map(|&m| {
+    fn order_moves(&mut self, pos: &Position, moves: &mut [Move], tt_move: Move, ply: usize) {
+        let mut scored = std::mem::take(&mut self.scratch);
+        scored.clear();
+        scored.extend(moves.iter().map(|&m| {
                 let s = if m == tt_move {
                     1_000_000
                 } else if !mv_is_drop(m) && pos.board[mv_to(m)] != EMPTY {
                     let victim = PIECE_VALUE[ptype(pos.board[mv_to(m)]) as usize];
                     let attacker = PIECE_VALUE[ptype(pos.board[mv_from(m)]) as usize];
-                    100_000 + victim * 10 - attacker / 10
+                    if attacker > victim + 50 && pos.is_attacked(mv_to(m), pos.side ^ 1) {
+                        // 取り返される損な取りは静かな手の後ろに回す
+                        60_000 + victim - attacker / 10
+                    } else {
+                        100_000 + victim * 10 - attacker / 10
+                    }
                 } else if mv_is_promo(m) {
                     90_000
                 } else if ply <= MAX_PLY && (self.killers[ply][0] == m || self.killers[ply][1] == m) {
@@ -228,12 +239,12 @@ impl Searcher {
                     self.history[Self::hist_idx(pos, m)].min(70_000)
                 };
                 (s, m)
-            })
-            .collect();
+            }));
         scored.sort_unstable_by(|a, b| b.0.cmp(&a.0));
-        for (i, (_, m)) in scored.into_iter().enumerate() {
+        for (i, &(_, m)) in scored.iter().enumerate() {
             moves[i] = m;
         }
+        self.scratch = scored;
     }
 
     #[inline]
@@ -291,7 +302,11 @@ impl Searcher {
             }
         }
         let in_check = pos.in_check();
-        let depth = if in_check { depth + 1 } else { depth };
+        let mut depth = if in_check { depth + 1 } else { depth };
+        // Internal iterative reduction: TT 手がない深いノードは 1 浅く読む
+        if tt_move == NO_MOVE && depth >= 4 && !in_check {
+            depth -= 1;
+        }
 
         let static_eval = if in_check { -INF } else { evaluate(pos) };
 
@@ -316,7 +331,8 @@ impl Searcher {
             }
         }
 
-        let mut moves = Vec::with_capacity(160);
+        let mut moves = std::mem::take(&mut self.move_bufs[ply]);
+        moves.clear();
         pos.pseudo_moves(&mut moves, false);
         self.order_moves(pos, &mut moves, tt_move, ply);
 
@@ -324,7 +340,8 @@ impl Searcher {
         let mut best_score = -INF;
         let mut best_move = NO_MOVE;
         let mut legal = 0;
-        let mut quiets_tried: Vec<Move> = Vec::new();
+        let mut quiets_tried = std::mem::take(&mut self.quiet_bufs[ply]);
+        quiets_tried.clear();
         for &m in moves.iter() {
             let quiet = !mv_is_promo(m) && (mv_is_drop(m) || pos.board[mv_to(m)] == EMPTY);
             let hidx = Self::hist_idx(pos, m);
@@ -359,6 +376,13 @@ impl Searcher {
                     if pv {
                         r -= 1;
                     }
+                    let h = self.history[hidx];
+                    if h > 2000 {
+                        r -= 1;
+                    } else if h < -500 {
+                        r += 1;
+                    }
+                    r = r.clamp(0, depth - 2);
                 }
                 score = -self.negamax(pos, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
                 if score > alpha && r > 0 {
@@ -370,6 +394,8 @@ impl Searcher {
             }
             pos.undo_move();
             if self.stopped {
+                self.move_bufs[ply] = moves;
+                self.quiet_bufs[ply] = quiets_tried;
                 return 0;
             }
             if score > best_score {
@@ -397,6 +423,8 @@ impl Searcher {
                 quiets_tried.push(m);
             }
         }
+        self.move_bufs[ply] = moves;
+        self.quiet_bufs[ply] = quiets_tried;
         if legal == 0 {
             // 詰み（将棋では手がない＝負け）
             return -MATE + ply as i32;
@@ -433,7 +461,8 @@ impl Searcher {
             }
             best = stand;
         }
-        let mut moves = Vec::with_capacity(64);
+        let mut moves = std::mem::take(&mut self.move_bufs[ply]);
+        moves.clear();
         pos.pseudo_moves(&mut moves, !in_check);
         self.order_moves(pos, &mut moves, NO_MOVE, MAX_PLY);
         let mut legal = 0;
@@ -457,6 +486,7 @@ impl Searcher {
             let score = -self.qsearch(pos, ply + 1, -beta, -alpha, qdepth + 1);
             pos.undo_move();
             if self.stopped {
+                self.move_bufs[ply] = moves;
                 return 0;
             }
             if score > best {
@@ -469,6 +499,7 @@ impl Searcher {
                 }
             }
         }
+        self.move_bufs[ply] = moves;
         if in_check && legal == 0 {
             return -MATE + ply as i32;
         }
