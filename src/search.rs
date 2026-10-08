@@ -2,7 +2,10 @@
 
 use crate::eval::{evaluate, PIECE_VALUE};
 use crate::position::*;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use crate::browser_clock::Instant;
 
 pub const INF: i32 = 32000;
 pub const MATE: i32 = 31000;
