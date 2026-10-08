@@ -71,6 +71,7 @@ pub struct Searcher {
     node_limit: Option<u64>,
     stopped: bool,
     killers: [[Move; 2]; MAX_PLY + 1],
+    evals: [i32; MAX_PLY + 2],
     history: Vec<i32>, // [piece(32)][to(81)]
     pub verbose: bool,
     scratch: Vec<(i32, Move)>,
@@ -109,6 +110,7 @@ impl Searcher {
             node_limit: None,
             stopped: false,
             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
+            evals: [-INF; MAX_PLY + 2],
             history: vec![0; 32 * 81],
             verbose: true,
             scratch: Vec::with_capacity(256),
@@ -321,6 +323,8 @@ impl Searcher {
         }
 
         let static_eval = if in_check { -INF } else { evaluate(pos) };
+        self.evals[ply] = static_eval;
+        let improving = !in_check && ply >= 2 && self.evals[ply - 2] != -INF && static_eval > self.evals[ply - 2];
 
         // Reverse futility pruning（静的評価が beta を大きく上回るなら打ち切り）
         if !pv && !in_check && depth <= 3 && ply > 0 && beta.abs() < MATE - 1000 && static_eval - 150 * depth >= beta {
@@ -364,7 +368,7 @@ impl Searcher {
             legal += 1;
             let gives_check = pos.in_check();
             // Late move pruning: 浅い深さで後半の静かな手は読まない
-            if !pv && !in_check && !gives_check && quiet && depth <= 3 && legal > 8 + 4 * depth * depth
+            if !pv && !in_check && !gives_check && quiet && depth <= 3 && legal > (8 + 4 * depth * depth) / (2 - improving as i32)
                 && best_score > -MATE + 1000
             {
                 pos.undo_move();
@@ -388,6 +392,9 @@ impl Searcher {
                     r = r.clamp(1, depth - 2);
                     if pv {
                         r -= 1;
+                    }
+                    if !improving {
+                        r += 1;
                     }
                     let h = self.history[hidx];
                     if h > 2000 {

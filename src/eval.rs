@@ -6,6 +6,7 @@
 
 use crate::params::P;
 use crate::position::*;
+use std::sync::OnceLock;
 
 pub const IDX_PIECE: usize = 0;
 pub const IDX_HAND: usize = 15;
@@ -132,5 +133,108 @@ pub fn hand_score(pt: usize) -> i32 {
 #[inline]
 pub fn evaluate(pos: &Position) -> i32 {
     let us = pos.side;
-    pos.eval[us] - pos.eval[us ^ 1] + P[IDX_TEMPO]
+    let lin = pos.eval[us] - pos.eval[us ^ 1] + P[IDX_TEMPO];
+    if nn().enabled {
+        lin + nn_output(&pos.nn, us) as i32
+    } else {
+        lin
+    }
+}
+
+// ---- 小さなニューラルネット（線形評価への残差項） ----
+// 入力: PST / KP_OWN / KP_OPP / 持ち駒（各手番視点の疎な特徴）→ 隠れ層 NN_H（クリップ ReLU）→ 出力。
+// 隠れ層の値は do_move/undo_move で差分更新する（Position::nn）。重みは nn.bin（f32 リトルエンディアン）。
+pub const NN_H: usize = 32;
+pub const NN_HAND: usize = IDX_TEMPO - IDX_PST; // 持ち駒特徴の先頭
+pub const NN_IN: usize = NN_HAND + 8;
+
+/// 線形評価の特徴番号 → NN の入力番号
+#[inline(always)]
+pub fn nn_index(idx: usize) -> Option<usize> {
+    if idx >= IDX_PST && idx < IDX_TEMPO {
+        Some(idx - IDX_PST)
+    } else if idx >= IDX_HAND && idx < IDX_HAND + 8 {
+        Some(NN_HAND + idx - IDX_HAND)
+    } else {
+        None
+    }
+}
+
+pub struct Nn {
+    pub enabled: bool,
+    pub w1: Vec<[f32; NN_H]>,
+    pub b1: [f32; NN_H],
+    pub v: [[f32; NN_H]; 2], // [手番側, 相手側]
+}
+
+pub fn nn() -> &'static Nn {
+    static N: OnceLock<Nn> = OnceLock::new();
+    N.get_or_init(|| {
+        let bytes: &[u8] = include_bytes!("nn.bin");
+        let total = NN_IN * NN_H + NN_H + 2 * NN_H;
+        let mut nn = Nn { enabled: false, w1: Vec::new(), b1: [0.0; NN_H], v: [[0.0; NN_H]; 2] };
+        if bytes.len() != total * 4 {
+            return nn;
+        }
+        let f: Vec<f32> = bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        for i in 0..NN_IN {
+            let mut row = [0.0f32; NN_H];
+            row.copy_from_slice(&f[i * NN_H..(i + 1) * NN_H]);
+            nn.w1.push(row);
+        }
+        let o = NN_IN * NN_H;
+        nn.b1.copy_from_slice(&f[o..o + NN_H]);
+        nn.v[0].copy_from_slice(&f[o + NN_H..o + 2 * NN_H]);
+        nn.v[1].copy_from_slice(&f[o + 2 * NN_H..o + 3 * NN_H]);
+        nn.enabled = true;
+        nn
+    })
+}
+
+#[inline(always)]
+pub fn nn_axpy(acc: &mut [f32; NN_H], row: &[f32; NN_H], k: f32) {
+    for i in 0..NN_H {
+        acc[i] += row[i] * k;
+    }
+}
+
+/// 盤面全体から両色の隠れ層（活性化前）を計算する
+pub fn compute_nn(pos: &Position) -> [[f32; NN_H]; 2] {
+    let n = nn();
+    let mut acc = [n.b1, n.b1];
+    if !n.enabled {
+        return acc;
+    }
+    eval_terms(pos, |c, idx, k| {
+        if let Some(i) = nn_index(idx) {
+            nn_axpy(&mut acc[c], &n.w1[i], k as f32);
+        }
+    });
+    acc
+}
+
+/// 盤上の駒 1 枚の NN 寄与を加減算する（sign = +1 / -1）
+#[inline]
+pub fn nn_piece(acc: &mut [[f32; NN_H]; 2], sq: usize, p: u8, ksq: &[usize; 2], sign: f32) {
+    let n = nn();
+    piece_terms(sq, p, ksq, &mut |c, idx, k| {
+        if let Some(i) = nn_index(idx) {
+            nn_axpy(&mut acc[c], &n.w1[i], sign * k as f32);
+        }
+    });
+}
+
+#[inline]
+pub fn nn_hand(acc: &mut [f32; NN_H], pt: usize, delta: f32) {
+    nn_axpy(acc, &nn().w1[NN_HAND + pt], delta);
+}
+
+#[inline]
+pub fn nn_output(acc: &[[f32; NN_H]; 2], us: usize) -> f32 {
+    let n = nn();
+    let mut s = 0.0f32;
+    for i in 0..NN_H {
+        s += n.v[0][i] * acc[us][i].clamp(0.0, 1.0) + n.v[1][i] * acc[us ^ 1][i].clamp(0.0, 1.0);
+    }
+    s
 }
