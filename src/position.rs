@@ -638,6 +638,37 @@ impl Position {
         false
     }
 
+    /// 自玉に対して pin されている自駒の集合（升ごとのビット）
+    pub fn pinned_mask(&self) -> u128 {
+        let t = tables();
+        let us = self.side;
+        let ksq = self.king_sq[us];
+        let mut pinned = 0u128;
+        for d in 0..8 {
+            let len = t.ray_len[ksq][d] as usize;
+            let od = 7 - d;
+            let ray = &t.ray[ksq][d];
+            let mut first = 81usize;
+            for i in 0..len {
+                let sq = ray[i] as usize;
+                let p = self.board[sq];
+                if p == EMPTY {
+                    continue;
+                }
+                if color_of(p) == us {
+                    if first == 81 {
+                        first = sq;
+                        continue;
+                    }
+                } else if first != 81 && t.slide_mask[us ^ 1][ptype(p) as usize] & (1 << od) != 0 {
+                    pinned |= 1u128 << first;
+                }
+                break;
+            }
+        }
+        pinned
+    }
+
     #[inline]
     pub fn in_check(&self) -> bool {
         self.is_attacked(self.king_sq[self.side], self.side ^ 1)

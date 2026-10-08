@@ -255,7 +255,19 @@ impl Searcher {
 
     /// 疑似合法手を指して、合法なら true（不合法なら戻して false）
     #[inline]
-    fn try_move(&mut self, pos: &mut Position, m: Move) -> bool {
+    fn try_move(&mut self, pos: &mut Position, m: Move, safe: bool, pinned: u128) -> bool {
+        // 王手されておらず、玉でも pin された駒でもない手は必ず合法（歩打ちは打ち歩詰めのため別扱い）
+        if safe && !(mv_is_drop(m) && mv_drop_pt(m) == PAWN) {
+            if mv_is_drop(m) {
+                pos.do_move(m);
+                return true;
+            }
+            let from = mv_from(m);
+            if ptype(pos.board[from]) != KING && pinned >> from & 1 == 0 {
+                pos.do_move(m);
+                return true;
+            }
+        }
         if mv_is_drop(m) && mv_drop_pt(m) == PAWN {
             if !pos.is_legal(m) {
                 return false;
@@ -340,12 +352,13 @@ impl Searcher {
         let mut best_score = -INF;
         let mut best_move = NO_MOVE;
         let mut legal = 0;
+        let pinned = if in_check { 0 } else { pos.pinned_mask() };
         let mut quiets_tried = std::mem::take(&mut self.quiet_bufs[ply]);
         quiets_tried.clear();
         for &m in moves.iter() {
             let quiet = !mv_is_promo(m) && (mv_is_drop(m) || pos.board[mv_to(m)] == EMPTY);
             let hidx = Self::hist_idx(pos, m);
-            if !self.try_move(pos, m) {
+            if !self.try_move(pos, m, !in_check, pinned) {
                 continue;
             }
             legal += 1;
@@ -449,7 +462,8 @@ impl Searcher {
         if ply >= MAX_PLY - 1 {
             return evaluate(pos);
         }
-        let in_check = qdepth < 4 && pos.in_check();
+        let really_in_check = pos.in_check();
+        let in_check = qdepth < 4 && really_in_check;
         let mut best = -INF;
         if !in_check {
             let stand = evaluate(pos);
@@ -466,6 +480,7 @@ impl Searcher {
         pos.pseudo_moves(&mut moves, !in_check);
         self.order_moves(pos, &mut moves, NO_MOVE, MAX_PLY);
         let mut legal = 0;
+        let pinned = if really_in_check { 0 } else { pos.pinned_mask() };
         for &m in moves.iter() {
             if !in_check && !mv_is_drop(m) {
                 let victim = PIECE_VALUE[ptype(pos.board[mv_to(m)]) as usize];
@@ -479,7 +494,7 @@ impl Searcher {
                     continue;
                 }
             }
-            if !self.try_move(pos, m) {
+            if !self.try_move(pos, m, !really_in_check, pinned) {
                 continue;
             }
             legal += 1;
