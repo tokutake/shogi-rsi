@@ -1,108 +1,18 @@
 //! Local browser interface. Positions are reconstructed and validated per request.
-use crate::position::*;
-use crate::search::{Limits, Searcher};
+use crate::game::state;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;
 
 const PAGE: &str = include_str!("../web/index.html");
 
-fn outcome(pos: &mut Position, plies: usize) -> String {
-    if !pos.has_legal_move() {
-        return format!(
-            "{}の勝ち（詰み）",
-            if pos.side == BLACK {
-                "後手"
-            } else {
-                "先手"
-            }
-        );
-    }
-    if pos.repetition_count() >= 3 {
-        return "千日手で引き分け".into();
-    }
-    if plies >= 320 {
-        return "320手で引き分け".into();
-    }
-    String::new()
-}
-
-// Body: human side, thinking milliseconds, state/play, then USI moves.
-fn state(body: &str) -> Result<String, &'static str> {
-    let mut words = body.split_whitespace();
-    let human: usize = words
-        .next()
-        .and_then(|v| v.parse().ok())
-        .filter(|&v| v < 2)
-        .ok_or("Invalid side")?;
-    let ms: u64 = words
-        .next()
-        .and_then(|v| v.parse().ok())
-        .filter(|&v| (100..=5000).contains(&v))
-        .ok_or("Invalid time")?;
-    let action = words.next().ok_or("Missing action")?;
-    if action != "state" && action != "play" {
-        return Err("Invalid action");
-    }
-    let mut moves: Vec<String> = words.map(str::to_owned).collect();
-    if moves.len() > 320 {
-        return Err("Too many moves");
-    }
-    let mut pos = Position::startpos();
-    for (i, text) in moves.iter().enumerate() {
-        if !outcome(&mut pos, i).is_empty() {
-            return Err("Game already ended");
-        }
-        let m = pos.parse_legal_usi_move(text).ok_or("Illegal move")?;
-        // The engine parser tolerates suffixes; the web API accepts canonical USI only.
-        if move_to_usi(m) != *text {
-            return Err("Invalid move notation");
-        }
-        pos.do_move(m);
-    }
-    let mut result = outcome(&mut pos, moves.len());
-    if action == "play" && pos.side != human && result.is_empty() {
-        let mut searcher = Searcher::new(32);
-        searcher.verbose = false;
-        let r = searcher.search(
-            &mut pos,
-            &Limits {
-                time_ms: Some(ms),
-                depth: None,
-                nodes: None,
-            },
-        );
-        if r.best == NO_MOVE {
-            result = format!(
-                "{}の勝ち（AI投了）",
-                if human == BLACK { "先手" } else { "後手" }
-            );
-        } else {
-            if !pos.legal_moves().contains(&r.best) {
-                return Err("Engine returned illegal move");
-            }
-            moves.push(move_to_usi(r.best));
-            pos.do_move(r.best);
-            result = outcome(&mut pos, moves.len());
-        }
-    }
-    let legal = if result.is_empty() {
-        pos.legal_moves()
-    } else {
-        Vec::new()
-    };
-    let strings = |v: Vec<String>| {
-        v.into_iter()
-            .map(|s| format!("\"{}\"", s))
-            .collect::<Vec<_>>()
-            .join(",")
-    };
-    Ok(format!("{{\"board\":{:?},\"hands\":{:?},\"side\":{},\"check\":{},\"moves\":[{}],\"legal\":[{}],\"result\":\"{}\"}}",
-        pos.board, pos.hand, pos.side, pos.in_check(), strings(moves), strings(legal.into_iter().map(move_to_usi).collect()), result))
-}
-
 fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &str) -> io::Result<()> {
-    write!(stream, "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n{}", status, kind, body.len(), body)
+    respond_bytes(stream, status, kind, body.as_bytes())
+}
+
+fn respond_bytes(stream: &mut TcpStream, status: &str, kind: &str, body: &[u8]) -> io::Result<()> {
+    write!(stream, "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n", status, kind, body.len())?;
+    stream.write_all(body)
 }
 
 // Accept the interface reached by this connection, never arbitrary Host names.
@@ -197,7 +107,51 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
         );
     }
     match route.as_str() {
-        "GET /" => respond(&mut stream, "200 OK", "text/html; charset=utf-8", PAGE),
+        "GET /" | "GET /index.html" => {
+            respond(&mut stream, "200 OK", "text/html; charset=utf-8", PAGE)
+        }
+        "GET /engine-worker.js" => respond(
+            &mut stream,
+            "200 OK",
+            "text/javascript",
+            include_str!("../web/engine-worker.js"),
+        ),
+        "GET /sw.js" => respond(
+            &mut stream,
+            "200 OK",
+            "text/javascript",
+            include_str!("../web/sw.js"),
+        ),
+        "GET /manifest.webmanifest" => respond(
+            &mut stream,
+            "200 OK",
+            "application/manifest+json",
+            include_str!("../web/manifest.webmanifest"),
+        ),
+        "GET /icon.svg" => respond(
+            &mut stream,
+            "200 OK",
+            "image/svg+xml",
+            include_str!("../web/icon.svg"),
+        ),
+        "GET /apple-touch-icon.png" => respond_bytes(
+            &mut stream,
+            "200 OK",
+            "image/png",
+            include_bytes!("../web/apple-touch-icon.png"),
+        ),
+        "GET /shogi_rsi.wasm" => {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("dist/shogi_rsi.wasm");
+            match std::fs::read(path) {
+                Ok(bytes) => respond_bytes(&mut stream, "200 OK", "application/wasm", &bytes),
+                Err(_) => respond(
+                    &mut stream,
+                    "404 Not Found",
+                    "text/plain",
+                    "Run sh scripts/build-web.sh to enable the browser engine",
+                ),
+            }
+        }
         "POST /api/game" => {
             while data.len() < header_end + length {
                 let n = stream.read(&mut buf)?;
@@ -241,7 +195,10 @@ pub fn serve(port: u16, lan: bool) -> io::Result<()> {
         port
     );
     if lan {
-        println!("iPad: 同じWi-Fiに接続し、Safariで http://<このPCのLAN IP>:{} を開いてください", port);
+        println!(
+            "iPhone/iPad: 同じWi-Fiに接続し、Safariで http://<このPCのLAN IP>:{} を開いてください",
+            port
+        );
         println!("LAN内の端末から接続できます。終了: Ctrl+C");
     }
     // Sequential requests keep concurrent AI searches from exhausting memory/CPU.

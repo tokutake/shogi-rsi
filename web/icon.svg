@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+  <rect width="180" height="180" rx="32" fill="#36583e"/>
+  <path d="M90 24 130 44 145 148H35L50 44Z" fill="#ead3a4"/>
+  <text x="90" y="116" text-anchor="middle" font-family="serif" font-weight="bold" font-size="72" fill="#27251f">王</text>
+</svg>

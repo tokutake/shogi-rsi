@@ -8,6 +8,7 @@ mod search;
 mod tune;
 mod usi;
 mod web;
+mod game;
 
 use position::*;
 

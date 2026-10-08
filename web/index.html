@@ -2,6 +2,11 @@
 <html lang="ja">
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#36583e" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="将棋RSI" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   <title>shogi-rsi — 人間 vs AI</title>
   <style>
     :root {
@@ -16,6 +21,7 @@
     body {
       margin: 0;
       padding: 28px 16px;
+      padding-bottom: max(20px, env(safe-area-inset-bottom));
       padding-left: max(16px, env(safe-area-inset-left));
       padding-right: max(16px, env(safe-area-inset-right));
     }
@@ -203,6 +209,13 @@
       font-size: 12px;
       color: #757969;
     }
+    @media (max-width: 480px) {
+      .layout { margin-top: 12px; gap: 12px; }
+      .layout > .panel { padding: 8px; min-width: 0; }
+      .square { min-width: 0; }
+      .square.target:after { width: 9px; height: 9px; bottom: 2px; right: 2px; }
+      header { gap: 8px; }
+    }
     @media (max-width: 900px) {
       body {
         padding: 18px 10px;
@@ -235,7 +248,7 @@
         <small>SHOGI RSI</small>
         <h1>人間 vs AI</h1>
       </div>
-      <small>ブラウザ対局</small>
+      <small id="engineStatus" role="status">AIを準備中…</small>
     </header>
     <div class="layout">
       <section class="panel" aria-label="将棋盤">
@@ -281,7 +294,9 @@
       </aside>
     </div>
     <footer>
-      千日手・320手は引き分け。連続王手の千日手の反則判定と入玉宣言は未対応。棋譜はこのページを開いている間保持されます。
+      千日手・320手は引き分け。連続王手の千日手の反則判定と入玉宣言は未対応。対局はこの端末に自動保存されます。
+      <p id="offlineStatus" role="status">オフライン利用にはHTTPSで開いてください。</p>
+      <p>iPhoneではSafariの共有メニューから「ホーム画面に追加」で起動できます。</p>
     </footer>
   </main>
   <dialog id="promotion">
@@ -463,37 +478,106 @@
         if (m) submitMove(m);
       };
     $("cancel").onclick = () => $("promotion").close();
-    async function request(moves, action = "play", nextHuman = human) {
+    const SAVE_KEY = "shogi-rsi-game-v1";
+    let worker = null, sequence = 0, engineFailure = null;
+    const waiting = new Map();
+    function saveGame() {
+      if (!game) return;
+      try {
+        localStorage.setItem(SAVE_KEY, JSON.stringify({
+          version: 1, moves: game.moves, human, time: $("time").value, resigned,
+        }));
+      } catch {
+        $("error").textContent = "この端末に保存できません。ページを閉じると対局が失われます。";
+      }
+    }
+    async function initEngine() {
+      try {
+        await new Promise((resolve, reject) => {
+          worker = new Worker("./engine-worker.js");
+          const timer = setTimeout(() => reject(new Error("AIの読み込みがタイムアウトしました")), 15000);
+          worker.onmessage = ({ data }) => {
+            if (data.ready) { clearTimeout(timer); resolve(); return; }
+            const task = waiting.get(data.id);
+            if (task) {
+              waiting.delete(data.id);
+              data.error ? task.reject(new Error(data.error)) : task.resolve(data.game);
+            } else if (data.error) { clearTimeout(timer); reject(new Error(data.error)); }
+          };
+          worker.onerror = () => {
+            clearTimeout(timer);
+            reject(new Error("AIを起動できませんでした"));
+            engineFailure = new Error("AIが停止しました。ページを開き直してください");
+            for (const task of waiting.values()) task.reject(new Error("AIが停止しました。ページを開き直してください"));
+            waiting.clear();
+          };
+        });
+        $("engineStatus").textContent = "端末内AI";
+      } catch {
+        worker?.terminate();
+        worker = null;
+        $("engineStatus").textContent = "PC接続のAI";
+      }
+    }
+    function localGame(body) {
+      if (engineFailure) return Promise.reject(engineFailure);
+      return new Promise((resolve, reject) => {
+        const id = ++sequence;
+        const timer = setTimeout(() => {
+          engineFailure = new Error("AIの応答がありません。ページを開き直してください");
+          worker.terminate();
+          for (const task of waiting.values()) task.reject(engineFailure);
+          waiting.clear();
+        }, 30000);
+        waiting.set(id, {
+          resolve: game => { clearTimeout(timer); resolve(game); },
+          reject: error => { clearTimeout(timer); reject(error); },
+        });
+        worker.postMessage({ id, body });
+      });
+    }
+    async function request(moves, action = "play", nextHuman = human, nextResigned = false) {
       if (busy) return false;
       busy = true;
       selected = null;
       $("error").textContent = "";
       render();
       try {
-        const response = await fetch("/api/game", {
-          method: "POST",
-          headers: { "Content-Type": "text/plain" },
-          body: `${nextHuman} ${$("time").value} ${action} ${moves.join(" ")}`,
-        });
-        if (!response.ok) throw new Error("対局データを処理できませんでした");
-        const next = await response.json();
+        const body = `${nextHuman} ${$("time").value} ${action} ${moves.join(" ")}`;
+        let next;
+        if (worker) {
+          next = await localGame(body);
+        } else {
+          const response = await fetch("./api/game", {
+            method: "POST",
+            headers: { "Content-Type": "text/plain" },
+            body,
+            signal: AbortSignal.timeout(15000),
+          });
+          if (!response.ok) throw new Error("対局データを処理できませんでした");
+          next = await response.json();
+        }
         game = next;
         human = nextHuman;
-        resigned = false;
+        resigned = nextResigned;
+        saveGame();
         return true;
       } catch (e) {
         $("error").textContent =
-          `${e.message}。サーバーの起動を確認して再試行してください。`;
+          `${e.message}。${worker ? "ページを開き直すか、新しい対局で再試行してください。" : "初回は通信環境とサーバーの起動を確認してください。"}`;
         return false;
       } finally {
         busy = false;
         render();
       }
     }
-    function submitMove(m) {
-      request([...game.moves, m]);
+    async function submitMove(m) {
+      // Commit the human move before thinking, so suspension does not lose it.
+      if (await request([...game.moves, m], "state")) await request(game.moves);
     }
-    $("new").onclick = () => request([], "play", Number($("side").value));
+    $("new").onclick = async () => {
+      if (await request([], "state", Number($("side").value))) await request(game.moves);
+    };
     $("undo").onclick = () => {
       let moves = game.moves.slice();
       do {
@@ -503,9 +587,47 @@
     };
     $("resign").onclick = () => {
       resigned = true;
+      saveGame();
       selected = null;
       render();
     };
-    request([]);
+    $("time").onchange = saveGame;
+    async function start() {
+      busy = true;
+      render();
+      await initEngine();
+      busy = false;
+      let saved;
+      try { saved = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch { /* storage unavailable */ }
+      if (saved?.version === 1 && Array.isArray(saved.moves) &&
+          saved.moves.length <= 320 && saved.moves.every(m => typeof m === "string" && /^[1-9][a-i][1-9][a-i]\+?$|^[PLNSGBR]\*[1-9][a-i]$/.test(m)) &&
+          (saved.human === 0 || saved.human === 1)) {
+        $("side").value = String(saved.human);
+        if (["300", "1000", "3000"].includes(saved.time)) $("time").value = saved.time;
+        if (await request(saved.moves, "state", saved.human, saved.resigned === true)) {
+          if (!resigned && !game.result && game.side !== human) await request(game.moves);
+        }
+      } else {
+        await request([]);
+      }
+      if (worker && "serviceWorker" in navigator && window.isSecureContext) {
+        try {
+          $("offlineStatus").textContent = "オフライン用データを保存中…";
+          await navigator.serviceWorker.register("./sw.js");
+          let offlineTimer;
+          const registration = await Promise.race([
+            navigator.serviceWorker.ready,
+            new Promise((_, reject) => {
+              offlineTimer = setTimeout(() => reject(new Error("Offline cache timeout")), 15000);
+            }),
+          ]).finally(() => clearTimeout(offlineTimer));
+          // ready resolves only after the entire offline bundle is installed.
+          if (registration.active) $("offlineStatus").textContent = "オフライン準備完了。外出先でも通信なしで遊べます。";
+        } catch {
+          $("offlineStatus").textContent = "オフライン保存に失敗しました。通信できる場所で開き直してください。";
+        }
+      }
+    }
+    start();
   </script>
 </html>
