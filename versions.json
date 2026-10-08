@@ -70,5 +70,13 @@
     "parent": "v8-hayate",
     "created": "2026-10-07T03:52:10Z",
     "description": "探索: IIR・損な取りの後回し・履歴LMR・反復深化の時間制限緩和・評価差分更新 / 評価: 手番ボーナス + v8自己対局を追加して25万局面で再学習"
+  },
+  {
+    "number": 10,
+    "name": "junpu",
+    "commit": "e4fdeaa2152c7761114e033a141ee1319977fc67",
+    "parent": "v9-ibuki",
+    "created": "2026-10-08T02:04:15Z",
+    "description": "探索: 時間マージン縮小・pin判定で合法性チェック省略・improving / 評価: 線形評価への残差NN(隠れ32, KP特徴共有)を34万局面で学習"
   }
 ]

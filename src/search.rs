@@ -71,6 +71,7 @@ pub struct Searcher {
     node_limit: Option<u64>,
     stopped: bool,
     killers: [[Move; 2]; MAX_PLY + 1],
+    evals: [i32; MAX_PLY + 2],
     history: Vec<i32>, // [piece(32)][to(81)]
     pub verbose: bool,
     scratch: Vec<(i32, Move)>,
@@ -109,6 +110,7 @@ impl Searcher {
             node_limit: None,
             stopped: false,
             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
+            evals: [-INF; MAX_PLY + 2],
             history: vec![0; 32 * 81],
             verbose: true,
             scratch: Vec::with_capacity(256),
@@ -255,7 +257,19 @@ impl Searcher {
 
     /// 疑似合法手を指して、合法なら true（不合法なら戻して false）
     #[inline]
-    fn try_move(&mut self, pos: &mut Position, m: Move) -> bool {
+    fn try_move(&mut self, pos: &mut Position, m: Move, safe: bool, pinned: u128) -> bool {
+        // 王手されておらず、玉でも pin された駒でもない手は必ず合法（歩打ちは打ち歩詰めのため別扱い）
+        if safe && !(mv_is_drop(m) && mv_drop_pt(m) == PAWN) {
+            if mv_is_drop(m) {
+                pos.do_move(m);
+                return true;
+            }
+            let from = mv_from(m);
+            if ptype(pos.board[from]) != KING && pinned >> from & 1 == 0 {
+                pos.do_move(m);
+                return true;
+            }
+        }
         if mv_is_drop(m) && mv_drop_pt(m) == PAWN {
             if !pos.is_legal(m) {
                 return false;
@@ -309,6 +323,8 @@ impl Searcher {
         }
 
         let static_eval = if in_check { -INF } else { evaluate(pos) };
+        self.evals[ply] = static_eval;
+        let improving = !in_check && ply >= 2 && self.evals[ply - 2] != -INF && static_eval > self.evals[ply - 2];
 
         // Reverse futility pruning（静的評価が beta を大きく上回るなら打ち切り）
         if !pv && !in_check && depth <= 3 && ply > 0 && beta.abs() < MATE - 1000 && static_eval - 150 * depth >= beta {
@@ -340,18 +356,19 @@ impl Searcher {
         let mut best_score = -INF;
         let mut best_move = NO_MOVE;
         let mut legal = 0;
+        let pinned = if in_check { 0 } else { pos.pinned_mask() };
         let mut quiets_tried = std::mem::take(&mut self.quiet_bufs[ply]);
         quiets_tried.clear();
         for &m in moves.iter() {
             let quiet = !mv_is_promo(m) && (mv_is_drop(m) || pos.board[mv_to(m)] == EMPTY);
             let hidx = Self::hist_idx(pos, m);
-            if !self.try_move(pos, m) {
+            if !self.try_move(pos, m, !in_check, pinned) {
                 continue;
             }
             legal += 1;
             let gives_check = pos.in_check();
             // Late move pruning: 浅い深さで後半の静かな手は読まない
-            if !pv && !in_check && !gives_check && quiet && depth <= 3 && legal > 8 + 4 * depth * depth
+            if !pv && !in_check && !gives_check && quiet && depth <= 3 && legal > (8 + 4 * depth * depth) / (2 - improving as i32)
                 && best_score > -MATE + 1000
             {
                 pos.undo_move();
@@ -375,6 +392,9 @@ impl Searcher {
                     r = r.clamp(1, depth - 2);
                     if pv {
                         r -= 1;
+                    }
+                    if !improving {
+                        r += 1;
                     }
                     let h = self.history[hidx];
                     if h > 2000 {
@@ -449,7 +469,8 @@ impl Searcher {
         if ply >= MAX_PLY - 1 {
             return evaluate(pos);
         }
-        let in_check = qdepth < 4 && pos.in_check();
+        let really_in_check = pos.in_check();
+        let in_check = qdepth < 4 && really_in_check;
         let mut best = -INF;
         if !in_check {
             let stand = evaluate(pos);
@@ -466,6 +487,7 @@ impl Searcher {
         pos.pseudo_moves(&mut moves, !in_check);
         self.order_moves(pos, &mut moves, NO_MOVE, MAX_PLY);
         let mut legal = 0;
+        let pinned = if really_in_check { 0 } else { pos.pinned_mask() };
         for &m in moves.iter() {
             if !in_check && !mv_is_drop(m) {
                 let victim = PIECE_VALUE[ptype(pos.board[mv_to(m)]) as usize];
@@ -479,7 +501,7 @@ impl Searcher {
                     continue;
                 }
             }
-            if !self.try_move(pos, m) {
+            if !self.try_move(pos, m, !really_in_check, pinned) {
                 continue;
             }
             legal += 1;

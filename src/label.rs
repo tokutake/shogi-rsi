@@ -70,6 +70,14 @@ pub fn run_label(args: &[String]) {
             }
         }
     }
+    // 途中で打ち切っても偏らないよう、順序をシャッフルする
+    let mut rs = 0x9E3779B97F4A7C15u64;
+    for i in (1..items.len()).rev() {
+        rs ^= rs << 13;
+        rs ^= rs >> 7;
+        rs ^= rs << 17;
+        items.swap(i, (rs % (i as u64 + 1)) as usize);
+    }
     eprintln!("positions to label: {}", items.len());
     let next = AtomicUsize::new(0);
     let file = Mutex::new(std::io::BufWriter::new(std::fs::File::create(&out).expect("create out")));

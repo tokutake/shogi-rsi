@@ -116,7 +116,7 @@ fn parse_go(tokens: &[&str], side: Color) -> Limits {
         let byoyomi = get("byoyomi").unwrap_or(0);
         if my_time > 0 || byoyomi > 0 || inc > 0 {
             let budget = my_time / 40 + byoyomi + inc;
-            let margin = 30.min(budget / 4);
+            let margin = 8.min(budget / 10);
             limits.time_ms = Some(budget.saturating_sub(margin).max(1));
         }
     }
