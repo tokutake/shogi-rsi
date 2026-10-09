@@ -78,5 +78,13 @@
     "parent": "v9-ibuki",
     "created": "2026-10-08T02:04:15Z",
     "description": "探索: 時間マージン縮小・pin判定で合法性チェック省略・improving / 評価: 線形評価への残差NN(隠れ32, KP特徴共有)を34万局面で学習"
+  },
+  {
+    "number": 11,
+    "name": "kaede",
+    "commit": "25dccd9fa0b92b9cce0cc4723a19ea95514e4a11",
+    "parent": "v10-junpu",
+    "created": "2026-10-09T03:02:12Z",
+    "description": "評価: 残差NN(隠れ32)を v10 自己対局1860局を加えた約44万局面で L2=1e-5 で再学習(検証損失 0.0178→0.0171)"
   }
 ]
