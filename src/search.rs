@@ -47,7 +47,7 @@ impl TT {
     #[inline]
     fn store(&mut self, key: u64, mv: Move, score: i32, depth: i32, flag: u8) {
         let e = &mut self.table[(key as usize) & self.mask];
-        if e.key != key || depth as i8 >= e.depth || flag == 1 {
+        if e.key != key || depth as i8 >= e.depth || (flag == 1 && depth > 0) {
             *e = TTEntry { key, mv, score, depth: depth as i8, flag };
         }
     }
@@ -76,6 +76,8 @@ pub struct Searcher {
     killers: [[Move; 2]; MAX_PLY + 1],
     evals: [i32; MAX_PLY + 2],
     history: Vec<i32>, // [piece(32)][to(81)]
+    counter: Vec<Move>, // [直前の手の piece*81+to] -> 反撃の手
+    prev_idx: [usize; MAX_PLY + 2], // 各 ply に至った手の hist_idx（なければ usize::MAX）
     pub verbose: bool,
     scratch: Vec<(i32, Move)>,
     move_bufs: Vec<Vec<Move>>,
@@ -115,6 +117,8 @@ impl Searcher {
             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
             evals: [-INF; MAX_PLY + 2],
             history: vec![0; 32 * 81],
+            counter: vec![NO_MOVE; 32 * 81],
+            prev_idx: [usize::MAX; MAX_PLY + 2],
             verbose: true,
             scratch: Vec::with_capacity(256),
             move_bufs: vec![Vec::with_capacity(160); MAX_PLY + 2],
@@ -157,6 +161,7 @@ impl Searcher {
         if legal.len() <= 1 {
             return SearchResult { best, score: 0, depth: 0, nodes: 0 };
         }
+        self.prev_idx[0] = usize::MAX;
         for depth in 1..=max_depth {
             // Aspiration window: 前回の評価値の周辺の窓で探索し、外れたら窓を広げて再探索
             let mut delta = 60;
@@ -224,6 +229,7 @@ impl Searcher {
     fn order_moves(&mut self, pos: &Position, moves: &mut [Move], tt_move: Move, ply: usize) {
         let mut scored = std::mem::take(&mut self.scratch);
         scored.clear();
+        let cm = if ply > 0 && ply < MAX_PLY && self.prev_idx[ply] != usize::MAX { self.counter[self.prev_idx[ply]] } else { NO_MOVE };
         scored.extend(moves.iter().map(|&m| {
                 let s = if m == tt_move {
                     1_000_000
@@ -240,6 +246,8 @@ impl Searcher {
                     90_000
                 } else if ply <= MAX_PLY && (self.killers[ply][0] == m || self.killers[ply][1] == m) {
                     80_000
+                } else if cm == m {
+                    75_000
                 } else {
                     self.history[Self::hist_idx(pos, m)].min(70_000)
                 };
@@ -339,6 +347,7 @@ impl Searcher {
             if static_eval >= beta {
                 let r = 2 + depth / 4;
                 pos.do_null_move();
+                self.prev_idx[ply + 1] = usize::MAX;
                 let score = -self.negamax(pos, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
                 pos.undo_null_move();
                 if self.stopped {
@@ -369,9 +378,17 @@ impl Searcher {
                 continue;
             }
             legal += 1;
+            self.prev_idx[ply + 1] = hidx;
             let gives_check = pos.in_check();
             // Late move pruning: 浅い深さで後半の静かな手は読まない
             if !pv && !in_check && !gives_check && quiet && depth <= 3 && legal > (8 + 4 * depth * depth) / (2 - improving as i32)
+                && best_score > -MATE + 1000
+            {
+                pos.undo_move();
+                continue;
+            }
+            // History pruning: 履歴が大きく負の静かな手は浅い深さで読まない
+            if !pv && !in_check && !gives_check && quiet && depth <= 3 && legal > 1 && self.history[hidx] < -300 * depth * depth
                 && best_score > -MATE + 1000
             {
                 pos.undo_move();
@@ -433,6 +450,9 @@ impl Searcher {
                                 self.killers[ply][0] = m;
                             }
                             self.history[hidx] += depth * depth;
+                            if self.prev_idx[ply] != usize::MAX {
+                                self.counter[self.prev_idx[ply]] = m;
+                            }
                             for &q in quiets_tried.iter() {
                                 let qi = Self::hist_idx(pos, q);
                                 self.history[qi] -= depth * depth / 2;
@@ -472,9 +492,25 @@ impl Searcher {
         if ply >= MAX_PLY - 1 {
             return evaluate(pos);
         }
+        let key = pos.key();
+        let mut tt_move = NO_MOVE;
+        if let Some(e) = self.tt.probe(key) {
+            tt_move = e.mv;
+            if alpha + 1 == beta {
+                let s = score_from_tt(e.score, ply);
+                match e.flag {
+                    1 => return s,
+                    2 if s >= beta => return s,
+                    3 if s <= alpha => return s,
+                    _ => {}
+                }
+            }
+        }
+        let orig_alpha = alpha;
         let really_in_check = pos.in_check();
         let in_check = qdepth < 4 && really_in_check;
         let mut best = -INF;
+        let mut best_move = NO_MOVE;
         if !in_check {
             let stand = evaluate(pos);
             if stand >= beta {
@@ -488,7 +524,7 @@ impl Searcher {
         let mut moves = std::mem::take(&mut self.move_bufs[ply]);
         moves.clear();
         pos.pseudo_moves(&mut moves, !in_check);
-        self.order_moves(pos, &mut moves, NO_MOVE, MAX_PLY);
+        self.order_moves(pos, &mut moves, tt_move, MAX_PLY);
         let mut legal = 0;
         let pinned = if really_in_check { 0 } else { pos.pinned_mask() };
         for &m in moves.iter() {
@@ -516,6 +552,7 @@ impl Searcher {
             }
             if score > best {
                 best = score;
+                best_move = m;
                 if score > alpha {
                     alpha = score;
                     if alpha >= beta {
@@ -528,6 +565,14 @@ impl Searcher {
         if in_check && legal == 0 {
             return -MATE + ply as i32;
         }
+        let flag = if best >= beta {
+            2
+        } else if best > orig_alpha {
+            1
+        } else {
+            3
+        };
+        self.tt.store(key, best_move, score_to_tt(best, ply), 0, flag);
         best
     }
 }
