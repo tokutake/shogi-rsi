@@ -473,7 +473,8 @@ impl Searcher {
             return evaluate(pos);
         }
         let really_in_check = pos.in_check();
-        let in_check = qdepth < 4 && really_in_check;
+        // 王手中は深さに関係なく応手を探索する。stand-pat は不正。
+        let in_check = really_in_check;
         let mut best = -INF;
         if !in_check {
             let stand = evaluate(pos);
