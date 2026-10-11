@@ -76,7 +76,6 @@ pub struct Searcher {
     killers: [[Move; 2]; MAX_PLY + 1],
     evals: [i32; MAX_PLY + 2],
     history: Vec<i32>, // [piece(32)][to(81)]
-    counter: Vec<Move>, // [直前の手の駒(32)][直前の手の行き先(81)] → その局面への応手
     pub verbose: bool,
     scratch: Vec<(i32, Move)>,
     move_bufs: Vec<Vec<Move>>,
@@ -116,7 +115,6 @@ impl Searcher {
             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
             evals: [-INF; MAX_PLY + 2],
             history: vec![0; 32 * 81],
-            counter: vec![NO_MOVE; 32 * 81],
             verbose: true,
             scratch: Vec::with_capacity(256),
             move_bufs: vec![Vec::with_capacity(160); MAX_PLY + 2],
@@ -147,7 +145,6 @@ impl Searcher {
         self.time_ms = limits.time_ms;
         self.node_limit = limits.nodes;
         self.killers = [[NO_MOVE; 2]; MAX_PLY + 1];
-        self.counter.fill(NO_MOVE);
         for h in self.history.iter_mut() {
             *h /= 8;
         }
@@ -227,7 +224,6 @@ impl Searcher {
     fn order_moves(&mut self, pos: &Position, moves: &mut [Move], tt_move: Move, ply: usize) {
         let mut scored = std::mem::take(&mut self.scratch);
         scored.clear();
-        let counter = Self::counter_idx(pos).map_or(NO_MOVE, |i| self.counter[i]);
         scored.extend(moves.iter().map(|&m| {
                 let s = if m == tt_move {
                     1_000_000
@@ -244,8 +240,6 @@ impl Searcher {
                     90_000
                 } else if ply <= MAX_PLY && (self.killers[ply][0] == m || self.killers[ply][1] == m) {
                     80_000
-                } else if m == counter {
-                    75_000
                 } else {
                     self.history[Self::hist_idx(pos, m)].min(70_000)
                 };
@@ -256,18 +250,6 @@ impl Searcher {
             moves[i] = m;
         }
         self.scratch = scored;
-    }
-
-    /// 直前の手に対する counter 表の添字（直前の手がない・パスなら None）
-    #[inline]
-    fn counter_idx(pos: &Position) -> Option<usize> {
-        let prev = pos.last_move();
-        if prev == NO_MOVE {
-            None
-        } else {
-            let to = mv_to(prev);
-            Some(pos.board[to] as usize * 81 + to)
-        }
     }
 
     #[inline]
@@ -378,7 +360,6 @@ impl Searcher {
         let mut best_move = NO_MOVE;
         let mut legal = 0;
         let pinned = if in_check { 0 } else { pos.pinned_mask() };
-        let cidx = Self::counter_idx(pos);
         let mut quiets_tried = std::mem::take(&mut self.quiet_bufs[ply]);
         quiets_tried.clear();
         for &m in moves.iter() {
@@ -452,9 +433,6 @@ impl Searcher {
                                 self.killers[ply][0] = m;
                             }
                             self.history[hidx] += depth * depth;
-                            if let Some(ci) = cidx {
-                                self.counter[ci] = m;
-                            }
                             for &q in quiets_tried.iter() {
                                 let qi = Self::hist_idx(pos, q);
                                 self.history[qi] -= depth * depth / 2;
