@@ -25,6 +25,23 @@ jobs:
           node-version: '22'
       - name: Test native engine
         run: cargo test --locked
+      - name: Verify legal move generation (perft)
+        shell: bash
+        run: |
+          cargo build --locked --release
+          check_perft() {
+            local expected="$1"
+            shift
+            local output
+            output="$(./target/release/shogi-rsi perft "$@")"
+            echo "$output"
+            if ! grep -Eq "(^|[^0-9])${expected}([^0-9]|$)" <<< "$output"; then
+              echo "::error::Expected perft count $expected for depth $1"
+              exit 1
+            fi
+          }
+          check_perft 719731 4
+          check_perft 4809015 3 'l6nl/5+P1gk/2np1S3/p1p4Pp/3P2Sp1/1PPb2P1P/P5GS1/R8/LN4bKL w RGgsn5p 1'
       - name: Build static app
         run: sh scripts/build-web.sh
       - name: Test WebAssembly engine and worker
