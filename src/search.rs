@@ -76,6 +76,7 @@ pub struct Searcher {
     killers: [[Move; 2]; MAX_PLY + 1],
     evals: [i32; MAX_PLY + 2],
     history: Vec<i32>, // [piece(32)][to(81)]
+    counter: Vec<Move>, // [直前の手の駒(32)][to(81)] -> 反撃手
     pub verbose: bool,
     scratch: Vec<(i32, Move)>,
     move_bufs: Vec<Vec<Move>>,
@@ -115,6 +116,7 @@ impl Searcher {
             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
             evals: [-INF; MAX_PLY + 2],
             history: vec![0; 32 * 81],
+            counter: vec![NO_MOVE; 32 * 81],
             verbose: true,
             scratch: Vec::with_capacity(256),
             move_bufs: vec![Vec::with_capacity(160); MAX_PLY + 2],
@@ -221,7 +223,7 @@ impl Searcher {
         SearchResult { best, score: best_score, depth: done_depth, nodes: self.nodes }
     }
 
-    fn order_moves(&mut self, pos: &Position, moves: &mut [Move], tt_move: Move, ply: usize) {
+    fn order_moves(&mut self, pos: &Position, moves: &mut [Move], tt_move: Move, ply: usize, cm: Move) {
         let mut scored = std::mem::take(&mut self.scratch);
         scored.clear();
         scored.extend(moves.iter().map(|&m| {
@@ -240,6 +242,8 @@ impl Searcher {
                     90_000
                 } else if ply <= MAX_PLY && (self.killers[ply][0] == m || self.killers[ply][1] == m) {
                     80_000
+                } else if m == cm && cm != NO_MOVE {
+                    75_000
                 } else {
                     self.history[Self::hist_idx(pos, m)].min(70_000)
                 };
@@ -250,6 +254,23 @@ impl Searcher {
             moves[i] = m;
         }
         self.scratch = scored;
+    }
+
+    #[inline]
+    fn counter_idx(pos: &Position) -> Option<usize> {
+        let lm = pos.last_move();
+        if lm == NO_MOVE {
+            return None;
+        }
+        Some(pos.board[mv_to(lm)] as usize * 81 + mv_to(lm))
+    }
+
+    #[inline]
+    fn counter_move(&self, pos: &Position) -> Move {
+        match Self::counter_idx(pos) {
+            Some(i) => self.counter[i],
+            None => NO_MOVE,
+        }
     }
 
     #[inline]
@@ -353,7 +374,8 @@ impl Searcher {
         let mut moves = std::mem::take(&mut self.move_bufs[ply]);
         moves.clear();
         pos.pseudo_moves(&mut moves, false);
-        self.order_moves(pos, &mut moves, tt_move, ply);
+        let cm = self.counter_move(pos);
+        self.order_moves(pos, &mut moves, tt_move, ply, cm);
 
         let orig_alpha = alpha;
         let mut best_score = -INF;
@@ -432,6 +454,9 @@ impl Searcher {
                                 self.killers[ply][1] = self.killers[ply][0];
                                 self.killers[ply][0] = m;
                             }
+                            if let Some(ci) = Self::counter_idx(pos) {
+                                self.counter[ci] = m;
+                            }
                             self.history[hidx] += depth * depth;
                             for &q in quiets_tried.iter() {
                                 let qi = Self::hist_idx(pos, q);
@@ -472,6 +497,19 @@ impl Searcher {
         if ply >= MAX_PLY - 1 {
             return evaluate(pos);
         }
+        let qkey = pos.key();
+        let mut qtt_move = NO_MOVE;
+        if let Some(e) = self.tt.probe(qkey) {
+            qtt_move = e.mv;
+            let s = score_from_tt(e.score, ply);
+            match e.flag {
+                1 => return s,
+                2 if s >= beta => return s,
+                3 if s <= alpha => return s,
+                _ => {}
+            }
+        }
+        let orig_alpha = alpha;
         let really_in_check = pos.in_check();
         let in_check = qdepth < 4 && really_in_check;
         let mut best = -INF;
@@ -488,8 +526,9 @@ impl Searcher {
         let mut moves = std::mem::take(&mut self.move_bufs[ply]);
         moves.clear();
         pos.pseudo_moves(&mut moves, !in_check);
-        self.order_moves(pos, &mut moves, NO_MOVE, MAX_PLY);
+        self.order_moves(pos, &mut moves, qtt_move, MAX_PLY, NO_MOVE);
         let mut legal = 0;
+        let mut qbest_move = NO_MOVE;
         let pinned = if really_in_check { 0 } else { pos.pinned_mask() };
         for &m in moves.iter() {
             if !in_check && !mv_is_drop(m) {
@@ -516,6 +555,7 @@ impl Searcher {
             }
             if score > best {
                 best = score;
+                qbest_move = m;
                 if score > alpha {
                     alpha = score;
                     if alpha >= beta {
@@ -528,6 +568,8 @@ impl Searcher {
         if in_check && legal == 0 {
             return -MATE + ply as i32;
         }
+        let flag = if best >= beta { 2 } else if best > orig_alpha { 1 } else { 3 };
+        self.tt.store(qkey, qbest_move, score_to_tt(best, ply), 0, flag);
         best
     }
 }
