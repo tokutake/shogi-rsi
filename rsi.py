@@ -358,7 +358,8 @@ def main():
             s.add_argument("--vs", nargs="*")
         s.add_argument("--games", type=int, default=100)
         s.add_argument("--byoyomi", type=int, default=100, help="1手あたりの思考時間(ms)")
-        s.add_argument("--concurrency", type=int, default=max(1, (os.cpu_count() or 2)))
+        s.add_argument("--concurrency", type=int, default=min(4, max(1, os.cpu_count() or 2)),
+                       help="並列対局数（既定: CPU数と4の小さい方。計測中は他の重い処理を避ける）")
         s.add_argument("--seed", type=int, default=None)
         s.set_defaults(f=fn)
     s = sub.add_parser("register")
