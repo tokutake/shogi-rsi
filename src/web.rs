@@ -16,7 +16,6 @@ fn respond_bytes(stream: &mut TcpStream, status: &str, kind: &str, body: &[u8]) 
 }
 
 // Accept the interface reached by this connection, never arbitrary Host names.
-// This also keeps the Host/origin checks effective when listening on the LAN.
 fn valid_host(host: &str, local: SocketAddr) -> bool {
     host == format!("localhost:{}", local.port())
         || host == format!("127.0.0.1:{}", local.port())
@@ -187,20 +186,13 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
     }
 }
 
-pub fn serve(port: u16, lan: bool) -> io::Result<()> {
-    let listener = TcpListener::bind((if lan { "0.0.0.0" } else { "127.0.0.1" }, port))?;
+pub fn serve(port: u16) -> io::Result<()> {
+    let listener = TcpListener::bind(("127.0.0.1", port))?;
     let port = listener.local_addr()?.port();
     println!(
         "ブラウザで http://127.0.0.1:{}/ を開いてください（終了: Ctrl+C）",
         port
     );
-    if lan {
-        println!(
-            "iPhone/iPad: 同じWi-Fiに接続し、Safariで http://<このPCのLAN IP>:{} を開いてください",
-            port
-        );
-        println!("LAN内の端末から接続できます。終了: Ctrl+C");
-    }
     // Sequential requests keep concurrent AI searches from exhausting memory/CPU.
     for stream in listener.incoming() {
         if let Err(e) = stream.and_then(handle) {
@@ -214,15 +206,14 @@ pub fn serve(port: u16, lan: bool) -> io::Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn validates_lan_host() {
-        let local = "192.168.1.20:8080".parse().unwrap();
-        assert!(valid_host("192.168.1.20:8080", local));
+    fn validates_local_host() {
+        let local = "127.0.0.1:8080".parse().unwrap();
         assert!(valid_host("localhost:8080", local));
         assert!(valid_host("127.0.0.1:8080", local));
-        assert!(!valid_host("192.168.1.21:8080", local));
-        assert!(!valid_host("192.168.1.20:8081", local));
+        assert!(!valid_host("192.168.1.20:8080", local));
+        assert!(!valid_host("127.0.0.1:8081", local));
         assert!(!valid_host("example.com:8080", local));
-        assert!(!valid_host("192.168.1.20:8080@example.com", local));
+        assert!(!valid_host("127.0.0.1:8080@example.com", local));
     }
 
     #[test]
