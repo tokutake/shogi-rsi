@@ -4,8 +4,8 @@
 //! + 玉の位置評価。パラメータは params.rs（自動調整の対象）。
 //! 評価は特徴量の線形和なので、eval_terms() が特徴量を列挙し、evaluate() と tune の両方が使う。
 
-use crate::params::P;
-use crate::position::*;
+use super::params::P;
+use super::position::*;
 use std::sync::OnceLock;
 
 pub const IDX_PIECE: usize = 0;

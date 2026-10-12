@@ -1,7 +1,7 @@
 //! 対局アリーナ: 2つの USI エンジンを指定局数対局させ、結果を JSON Lines で出力する。
 //! 審判（合法手判定・詰み・千日手・手数制限）は本クレートの Position を使う。
 
-use crate::position::*;
+use super::position::*;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};

@@ -1,7 +1,7 @@
 //! USI プロトコル。
 
-use crate::position::*;
-use crate::search::{Limits, Searcher};
+use super::position::*;
+use super::search::{Limits, Searcher};
 use std::io::{self, BufRead, Write};
 
 pub const ENGINE_NAME: &str = "shogi-rsi";
