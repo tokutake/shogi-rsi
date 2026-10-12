@@ -75,6 +75,15 @@ cargo build --release
     --seed 123 --out results/selfplay.jsonl
 ```
 
+NN残差評価の教師局面は、固定深さの自己対局から直接生成できます（v11 は深さ5で156万局面）。
+
+```sh
+./target/release/shogi-rsi gensfen --out results/gensfen.txt --positions 800000 --depth 5 --threads 4 --seed 1
+./target/release/shogi-rsi tune --labels results/gensfen.txt --lambda 0 --k 0.004 --lr 1.0
+cargo build --release   # 新しい params.rs で線形部分を組み込んでから NN を学習する
+./target/release/shogi-rsi nntrain --labels results/gensfen.txt --epochs 30
+```
+
 ## テスト
 
 ```sh
