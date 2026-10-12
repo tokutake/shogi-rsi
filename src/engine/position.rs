@@ -537,10 +537,9 @@ impl Position {
                 king_moved = true;
             }
             if king_moved {
-                self.eval = super::eval::compute_scores(self);
-                if use_nn {
-                    self.nn = super::eval::compute_nn(self);
-                }
+                let (e, n) = super::eval::compute_all(self);
+                self.eval = e;
+                self.nn = n;
             } else {
                 self.eval[us] += super::eval::piece_score(to, np, &self.king_sq)
                     - super::eval::piece_score(from, p, &self.king_sq);

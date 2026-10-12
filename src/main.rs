@@ -2,7 +2,7 @@
 mod engine;
 mod web;
 
-use engine::{arena, label, nn_train, position::*, search, tune, usi};
+use engine::{arena, gensfen, label, nn_train, position::*, search, tune, usi};
 
 fn arg_value(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
@@ -54,6 +54,7 @@ fn main() {
             println!("bench: nodes {} time {:.2}s nps {:.0}", total, secs, total as f64 / secs);
         }
         Some("label") => label::run_label(&args[2..]),
+        Some("gensfen") => gensfen::run_gensfen(&args[2..]),
         Some("nntrain") => nn_train::run_nntrain(&args[2..]),
         Some("tune") => tune::run_tune(&args[2..]),
         Some("arena") => {

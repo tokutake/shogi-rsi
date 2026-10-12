@@ -9,6 +9,8 @@ pub(crate) mod search;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod arena;
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod gensfen;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod label;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod nn_train;
