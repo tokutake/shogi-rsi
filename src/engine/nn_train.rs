@@ -1,14 +1,14 @@
 //! NN（線形評価への残差項）の学習。
 //!
-//!   shogi-rsi nntrain --labels labels.txt [--labels ...] --out src/nn.bin [--epochs 40] [--init src/nn.bin]
+//!   shogi-rsi nntrain --labels labels.txt [--labels ...] --out src/engine/nn.bin [--epochs 40] [--init src/engine/nn.bin]
 //!
 //! 教師は `label` が出力する `sfen|探索評価値|勝敗`。目標は手番側の勝率
 //! t = λ·結果 + (1-λ)·sigmoid(探索評価値·K)、予測は sigmoid(K·(線形評価 + NN 出力))。
 //! 線形評価は現行の params.rs を固定して使い、NN だけを学習する。
 
-use crate::eval::*;
-use crate::params::P;
-use crate::position::*;
+use super::eval::*;
+use super::params::P;
+use super::position::*;
 
 struct Sample {
     f: [Vec<(u16, f32)>; 2], // [手番側, 相手側] の入力特徴
@@ -138,7 +138,7 @@ impl Rng {
 
 pub fn run_nntrain(args: &[String]) {
     let mut labels = Vec::new();
-    let mut out = "src/nn.bin".to_string();
+    let mut out = "src/engine/nn.bin".to_string();
     let mut init: Option<String> = None;
     let mut epochs = 40;
     let mut lambda = 0.0f32;
