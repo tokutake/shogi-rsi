@@ -1,18 +1,8 @@
 #![allow(dead_code)]
-mod arena;
-mod eval;
-mod gensfen;
-mod label;
-mod nn_train;
-mod params;
-mod position;
-mod search;
-mod tune;
-mod usi;
+mod engine;
 mod web;
-mod game;
 
-use position::*;
+use engine::{arena, gensfen, label, nn_train, position::*, search, tune, usi};
 
 fn arg_value(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())

@@ -5,8 +5,8 @@
 //!
 //! 出力形式は label と同じ `sfen|手番側から見た探索評価値|先手から見た勝敗(1/0.5/0)`。
 
-use crate::position::*;
-use crate::search::{Limits, Searcher, MATE};
+use super::position::*;
+use super::search::{Limits, Searcher, MATE};
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;

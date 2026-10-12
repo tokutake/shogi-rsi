@@ -58,7 +58,7 @@ cargo build --release
 
 ### 評価関数の調整
 
-対局記録から局面と勝敗を集めてTexel tuningを行い、`src/params.rs` を更新します。
+対局記録から局面と勝敗を集めてTexel tuningを行い、`src/engine/params.rs` を更新します。
 
 ```sh
 ./target/release/shogi-rsi tune \
@@ -98,16 +98,18 @@ node tests/web-offline.mjs
 
 ## 主なファイル
 
+将棋関連の実装は `src/engine/` にまとめ、`src/main.rs` はコマンドの入口、`src/lib.rs` はWebAssemblyの入口、`src/web.rs` はWebサーバーを担当します。認証などを追加するときは、`src/auth/` のような機能別フォルダを `src/engine/` と並べて配置します。
+
 | パス | 内容 |
 |---|---|
-| `src/position.rs` | 盤面・合法手生成・SFEN・千日手 |
-| `src/eval.rs` / `src/params.rs` | 評価関数・評価パラメータ |
-| `src/search.rs` | 探索・置換表 |
-| `src/usi.rs` | USIプロトコル |
-| `src/game.rs` / `src/web.rs` | 対局処理・ローカルWebサーバー |
+| `src/engine/position.rs` | 盤面・合法手生成・SFEN・千日手 |
+| `src/engine/eval.rs` / `src/engine/params.rs` | 評価関数・評価パラメータ |
+| `src/engine/search.rs` | 探索・置換表 |
+| `src/engine/usi.rs` | USIプロトコル |
+| `src/engine/game.rs` / `src/web.rs` | 対局処理・ローカルWebサーバー |
 | `web/` / `src/lib.rs` | ブラウザUI・WebAssemblyエンジン |
-| `src/tune.rs` / `src/label.rs` / `src/nn_train.rs` | 評価パラメータ調整・教師データ生成・NN学習 |
-| `src/arena.rs` / `rsi.py` | 対局アリーナ・バージョン管理・Elo計算 |
+| `src/engine/tune.rs` / `src/engine/label.rs` / `src/engine/nn_train.rs` | 評価パラメータ調整・教師データ生成・NN学習 |
+| `src/engine/arena.rs` / `rsi.py` | 対局アリーナ・バージョン管理・Elo計算 |
 | `versions.json` / `results/` | バージョン台帳・対局記録・学習データ |
 | `docs/` | Web版ガイド・改善アイデア・作業ログ |
 

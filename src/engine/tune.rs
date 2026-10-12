@@ -1,11 +1,11 @@
 //! Texel tuning: 対局記録（results/*.jsonl の moves）から局面と勝敗を集め、
 //! 評価値から勝率を予測するロジスティック回帰の損失を最小化するよう params.rs を調整する。
 //!
-//!   shogi-rsi tune --data results/games.jsonl [--data ...] [--epochs 300] [--out src/params.rs]
+//!   shogi-rsi tune --data results/games.jsonl [--data ...] [--epochs 300] [--out src/engine/params.rs]
 
-use crate::eval::{eval_terms, IDX_PIECE, NUM_PARAMS};
-use crate::params::P;
-use crate::position::*;
+use super::eval::{eval_terms, IDX_PIECE, NUM_PARAMS};
+use super::params::P;
+use super::position::*;
 
 struct Sample {
     feats: Vec<(u16, i16)>, // (param idx, 先手から見た係数)
@@ -115,7 +115,7 @@ pub fn run_tune(args: &[String]) {
     let mut lambda = 0.3;
     let mut fixed_k: Option<f64> = None;
     let mut epochs = 300;
-    let mut out = "src/params.rs".to_string();
+    let mut out = "src/engine/params.rs".to_string();
     let mut lr = 0.5;
     let mut l2 = 1e-6;
     let mut min_ply = 16;
@@ -173,7 +173,7 @@ pub fn run_tune(args: &[String]) {
     eprintln!("K = {:.4}  train loss {:.6}  valid loss {:.6}", k, best_l, loss(&params, &valid, k));
 
     // 2. Adam で最適化（玉の価値・空マスは固定）
-    let fixed = |i: usize| i == IDX_PIECE || i == IDX_PIECE + KING as usize || i == crate::eval::IDX_HAND;
+    let fixed = |i: usize| i == IDX_PIECE || i == IDX_PIECE + KING as usize || i == super::eval::IDX_HAND;
     let mut m = vec![0.0; NUM_PARAMS];
     let mut v = vec![0.0; NUM_PARAMS];
     let (b1, b2, eps) = (0.9, 0.999, 1e-8);

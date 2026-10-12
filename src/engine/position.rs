@@ -261,7 +261,7 @@ struct Undo {
     captured: u8,
     hash: u64,
     eval: [i32; 2],
-    nn: [[f32; crate::eval::NN_H]; 2],
+    nn: [[f32; super::eval::NN_H]; 2],
 }
 
 #[derive(Clone)]
@@ -273,7 +273,7 @@ pub struct Position {
     pub hash: u64,
     pub ply: usize, // 開始局面からの手数
     pub eval: [i32; 2], // 各色の評価合計（do_move/undo_move で差分更新）
-    pub nn: [[f32; crate::eval::NN_H]; 2], // NN 隠れ層の活性化前の値
+    pub nn: [[f32; super::eval::NN_H]; 2], // NN 隠れ層の活性化前の値
     history: Vec<Undo>,
 }
 
@@ -303,7 +303,7 @@ impl Position {
             hash: 0,
             ply: 0,
             eval: [0, 0],
-            nn: [[0.0; crate::eval::NN_H]; 2],
+            nn: [[0.0; super::eval::NN_H]; 2],
             history: Vec::with_capacity(512),
         };
         let (mut r, mut c) = (0usize, 0usize);
@@ -369,8 +369,8 @@ impl Position {
             }
         }
         pos.hash = pos.compute_hash();
-        pos.eval = crate::eval::compute_scores(&pos);
-        pos.nn = crate::eval::compute_nn(&pos);
+        pos.eval = super::eval::compute_scores(&pos);
+        pos.nn = super::eval::compute_nn(&pos);
         Some(pos)
     }
 
@@ -493,7 +493,7 @@ impl Position {
         let prev_hash = self.hash;
         let prev_eval = self.eval;
         let prev_nn = self.nn;
-        let use_nn = crate::eval::nn().enabled;
+        let use_nn = super::eval::nn().enabled;
         let mut king_moved = false;
         if mv_is_drop(m) {
             let pt = mv_drop_pt(m);
@@ -503,10 +503,10 @@ impl Position {
             let p = make_piece(us, pt);
             self.board[to] = p;
             self.hash ^= z.board[p as usize][to];
-            self.eval[us] += crate::eval::piece_score(to, p, &self.king_sq) - crate::eval::hand_score(pt as usize);
+            self.eval[us] += super::eval::piece_score(to, p, &self.king_sq) - super::eval::hand_score(pt as usize);
             if use_nn {
-                crate::eval::nn_piece(&mut self.nn, to, p, &self.king_sq, 1.0);
-                crate::eval::nn_hand(&mut self.nn[us], pt as usize, -1.0);
+                super::eval::nn_piece(&mut self.nn, to, p, &self.king_sq, 1.0);
+                super::eval::nn_hand(&mut self.nn[us], pt as usize, -1.0);
             }
         } else {
             let from = mv_from(m);
@@ -514,14 +514,14 @@ impl Position {
             captured = self.board[to];
             if captured != EMPTY {
                 self.hash ^= z.board[captured as usize][to];
-                self.eval[us ^ 1] -= crate::eval::piece_score(to, captured, &self.king_sq);
+                self.eval[us ^ 1] -= super::eval::piece_score(to, captured, &self.king_sq);
                 if use_nn {
-                    crate::eval::nn_piece(&mut self.nn, to, captured, &self.king_sq, -1.0);
+                    super::eval::nn_piece(&mut self.nn, to, captured, &self.king_sq, -1.0);
                 }
                 let cpt = unpromote(ptype(captured)) as usize;
-                self.eval[us] += crate::eval::hand_score(cpt);
+                self.eval[us] += super::eval::hand_score(cpt);
                 if use_nn {
-                    crate::eval::nn_hand(&mut self.nn[us], cpt, 1.0);
+                    super::eval::nn_hand(&mut self.nn[us], cpt, 1.0);
                 }
                 let n = self.hand[us][cpt] as usize;
                 self.hash ^= z.hand[us][cpt][n] ^ z.hand[us][cpt][n + 1];
@@ -537,15 +537,15 @@ impl Position {
                 king_moved = true;
             }
             if king_moved {
-                let (e, n) = crate::eval::compute_all(self);
+                let (e, n) = super::eval::compute_all(self);
                 self.eval = e;
                 self.nn = n;
             } else {
-                self.eval[us] += crate::eval::piece_score(to, np, &self.king_sq)
-                    - crate::eval::piece_score(from, p, &self.king_sq);
+                self.eval[us] += super::eval::piece_score(to, np, &self.king_sq)
+                    - super::eval::piece_score(from, p, &self.king_sq);
                 if use_nn {
-                    crate::eval::nn_piece(&mut self.nn, from, p, &self.king_sq, -1.0);
-                    crate::eval::nn_piece(&mut self.nn, to, np, &self.king_sq, 1.0);
+                    super::eval::nn_piece(&mut self.nn, from, p, &self.king_sq, -1.0);
+                    super::eval::nn_piece(&mut self.nn, to, np, &self.king_sq, 1.0);
                 }
             }
         }

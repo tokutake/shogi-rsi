@@ -4,8 +4,8 @@
 //!
 //! 出力は 1 行 1 局面: `sfen|手番側から見た探索評価値|先手から見た勝敗(1/0.5/0)`。tune が読み込む。
 
-use crate::position::*;
-use crate::search::{Limits, Searcher};
+use super::position::*;
+use super::search::{Limits, Searcher};
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;

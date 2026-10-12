@@ -1,5 +1,5 @@
 //! Local browser interface. Positions are reconstructed and validated per request.
-use crate::game::state;
+use crate::engine::game::state;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;

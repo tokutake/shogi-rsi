@@ -1,6 +1,6 @@
 //! Shared validated game API for native and browser engines.
-use crate::position::*;
-use crate::search::{Limits, Searcher};
+use super::position::*;
+use super::search::{Limits, Searcher};
 
 fn outcome(pos: &mut Position, plies: usize) -> String {
     if !pos.has_legal_move() {
