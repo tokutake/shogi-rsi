@@ -86,5 +86,13 @@
     "parent": "v10-junpu",
     "created": "2026-10-12T06:23:33Z",
     "description": "評価: gensfen(固定深さ自己対局で教師を直接生成)の156万局面で線形評価とNN残差を再学習"
+  },
+  {
+    "number": 12,
+    "name": "raiden",
+    "commit": "0d03e928fd0479c3422fa0dbb426d78b6439c328",
+    "parent": "v11-kaede",
+    "created": "2026-10-13T14:06:57Z",
+    "description": "評価: gensfen 480万局面(v11と候補で各240万, 深さ5)で線形評価とNN残差を再学習"
   }
 ]
