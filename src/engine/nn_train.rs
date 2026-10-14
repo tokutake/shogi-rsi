@@ -10,10 +10,31 @@ use super::eval::*;
 use super::params::P;
 use super::position::*;
 
-struct Sample {
-    f: [Vec<(u16, f32)>; 2], // [手番側, 相手側] の入力特徴
-    lin: f32,                // 線形評価（手番側から見た値）
+/// 教師局面をまとめて保持する。入力特徴は u16 の番号を平坦な配列に詰め、
+/// 個数 n > 1 の特徴（持ち駒）は同じ番号を n 回並べる（1 局面あたり約 250 バイト）。
+struct Data {
+    feats: Vec<u16>,
+    start: Vec<usize>, // 局面 i の特徴は feats[start[i]..start[i + 1]]
+    split: Vec<u16>,   // そのうち先頭 split[i] 個が手番側、残りが相手側
+    lin: Vec<f32>,     // 線形評価（手番側から見た値）
+    target: Vec<f32>,
+}
+
+struct Sample<'a> {
+    f: [&'a [u16]; 2], // [手番側, 相手側] の入力特徴
+    lin: f32,
     target: f32,
+}
+
+impl Data {
+    fn len(&self) -> usize {
+        self.lin.len()
+    }
+    fn get(&self, i: usize) -> Sample<'_> {
+        let all = &self.feats[self.start[i]..self.start[i + 1]];
+        let (a, b) = all.split_at(self.split[i] as usize);
+        Sample { f: [a, b], lin: self.lin[i], target: self.target[i] }
+    }
 }
 
 #[inline]
@@ -21,11 +42,13 @@ fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
-fn load(paths: &[String], lambda: f32, k: f32) -> Vec<Sample> {
-    let mut out = Vec::new();
+fn load(paths: &[String], lambda: f32, k: f32) -> Data {
+    let mut d = Data { feats: Vec::new(), start: vec![0], split: Vec::new(), lin: Vec::new(), target: Vec::new() };
+    let mut f: [Vec<u16>; 2] = [Vec::with_capacity(160), Vec::with_capacity(160)];
     for path in paths {
-        let Ok(text) = std::fs::read_to_string(path) else { continue };
-        for line in text.lines() {
+        let Ok(file) = std::fs::File::open(path) else { continue };
+        for line in std::io::BufRead::lines(std::io::BufReader::new(file)) {
+            let Ok(line) = line else { break };
             let mut it = line.split('|');
             let (Some(sfen), Some(sc), Some(res)) = (it.next(), it.next(), it.next()) else { continue };
             let (Ok(sc), Ok(res)) = (sc.parse::<f32>(), res.parse::<f32>()) else { continue };
@@ -33,7 +56,8 @@ fn load(paths: &[String], lambda: f32, k: f32) -> Vec<Sample> {
             let us = pos.side;
             let res_us = if us == BLACK { res } else { 1.0 - res };
             let target = lambda * res_us + (1.0 - lambda) * sigmoid(sc * k);
-            let mut f: [Vec<(u16, f32)>; 2] = [Vec::with_capacity(96), Vec::with_capacity(96)];
+            f[0].clear();
+            f[1].clear();
             let mut lin = [0i32; 2];
             eval_terms(&pos, |c, idx, n| {
                 if idx != IDX_TEMPO {
@@ -41,14 +65,20 @@ fn load(paths: &[String], lambda: f32, k: f32) -> Vec<Sample> {
                 }
                 if let Some(i) = nn_index(idx) {
                     let side = if c == us { 0 } else { 1 };
-                    f[side].push((i as u16, n as f32));
+                    for _ in 0..n {
+                        f[side].push(i as u16);
+                    }
                 }
             });
-            let lin_us = (lin[us] - lin[us ^ 1] + P[IDX_TEMPO]) as f32;
-            out.push(Sample { f, lin: lin_us, target });
+            d.feats.extend_from_slice(&f[0]);
+            d.feats.extend_from_slice(&f[1]);
+            d.start.push(d.feats.len());
+            d.split.push(f[0].len() as u16);
+            d.lin.push((lin[us] - lin[us ^ 1] + P[IDX_TEMPO]) as f32);
+            d.target.push(target);
         }
     }
-    out
+    d
 }
 
 struct Net {
@@ -78,10 +108,10 @@ impl Net {
     fn forward(&self, s: &Sample, h: &mut [[f32; NN_H]; 2], a: &mut [[f32; NN_H]; 2]) -> f32 {
         for side in 0..2 {
             a[side].copy_from_slice(&self.b1);
-            for &(i, n) in s.f[side].iter() {
+            for &i in s.f[side].iter() {
                 let row = &self.w1[i as usize * NN_H..(i as usize + 1) * NN_H];
                 for j in 0..NN_H {
-                    a[side][j] += row[j] * n;
+                    a[side][j] += row[j];
                 }
             }
             for j in 0..NN_H {
@@ -98,18 +128,19 @@ impl Net {
     }
 }
 
-fn loss(net: &Net, data: &[Sample], k: f32, use_nn: bool) -> f64 {
+fn loss(net: &Net, data: &Data, set: &[usize], k: f32, use_nn: bool) -> f64 {
     let nth = 4;
-    let chunk = (data.len() + nth - 1) / nth;
+    let chunk = (set.len() + nth - 1) / nth;
     let total: f64 = std::thread::scope(|sc| {
-        let hs: Vec<_> = data
+        let hs: Vec<_> = set
             .chunks(chunk)
             .map(|ch| {
                 sc.spawn(move || {
                     let mut h = [[0.0; NN_H]; 2];
                     let mut a = [[0.0; NN_H]; 2];
                     let mut l = 0.0f64;
-                    for s in ch {
+                    for &si in ch {
+                        let s = &data.get(si);
                         let o = if use_nn { net.forward(s, &mut h, &mut a) } else { 0.0 };
                         let p = sigmoid(k * (s.lin + o));
                         l += ((s.target - p) as f64).powi(2);
@@ -120,7 +151,7 @@ fn loss(net: &Net, data: &[Sample], k: f32, use_nn: bool) -> f64 {
             .collect();
         hs.into_iter().map(|h| h.join().unwrap()).sum()
     });
-    total / data.len() as f64
+    total / set.len() as f64
 }
 
 struct Rng(u64);
@@ -166,15 +197,7 @@ pub fn run_nntrain(args: &[String]) {
     }
     let data = load(&labels, lambda, k);
     eprintln!("samples: {}", data.len());
-    let mut train = Vec::new();
-    let mut valid = Vec::new();
-    for (i, s) in data.into_iter().enumerate() {
-        if i % 10 == 0 {
-            valid.push(s);
-        } else {
-            train.push(s);
-        }
-    }
+    let (valid, train): (Vec<usize>, Vec<usize>) = (0..data.len()).partition(|i| i % 10 == 0);
     let mut rng = Rng(0x2545F4914F6CDD1D);
     let mut net = match &init {
         Some(path) => {
@@ -189,17 +212,17 @@ pub fn run_nntrain(args: &[String]) {
             v: vec![0.0; 2 * NN_H],
         },
     };
-    eprintln!("linear only: valid loss {:.6}", loss(&net, &valid, k, false));
-    eprintln!("initial   : valid loss {:.6}", loss(&net, &valid, k, true));
+    eprintln!("linear only: valid loss {:.6}", loss(&net, &data, &valid, k, false));
+    eprintln!("initial   : valid loss {:.6}", loss(&net, &data, &valid, k, true));
 
     let n_par = Net::len();
     let mut m = vec![0.0f32; n_par];
     let mut vv = vec![0.0f32; n_par];
     let (b1c, b2c, eps) = (0.9f32, 0.999f32, 1e-8f32);
     let mut step = 0i32;
-    let mut best = loss(&net, &valid, k, true);
+    let mut best = loss(&net, &data, &valid, k, true);
     let mut best_net = net.to_flat();
-    let mut order: Vec<usize> = (0..train.len()).collect();
+    let mut order = train.clone();
     let nth = 4;
     for epoch in 1..=epochs {
         // シャッフル
@@ -216,13 +239,13 @@ pub fn run_nntrain(args: &[String]) {
                     .chunks(chunk)
                     .map(|ch| {
                         let cur = &cur;
-                        let train = &train;
+                        let data = &data;
                         sc.spawn(move || {
                             let mut g = vec![0.0f32; n_par];
                             let mut h = [[0.0; NN_H]; 2];
                             let mut a = [[0.0; NN_H]; 2];
                             for &si in ch {
-                                let s = &train[si];
+                                let s = &data.get(si);
                                 let o = cur.forward(s, &mut h, &mut a);
                                 let p = sigmoid(k * (s.lin + o));
                                 let gout = -2.0 * (s.target - p) * p * (1.0 - p) * k;
@@ -237,10 +260,10 @@ pub fn run_nntrain(args: &[String]) {
                                     for j in 0..NN_H {
                                         g[NN_IN * NN_H + j] += da[j];
                                     }
-                                    for &(fi, n) in s.f[side].iter() {
+                                    for &fi in s.f[side].iter() {
                                         let base = fi as usize * NN_H;
                                         for j in 0..NN_H {
-                                            g[base + j] += da[j] * n;
+                                            g[base + j] += da[j];
                                         }
                                     }
                                 }
@@ -273,8 +296,8 @@ pub fn run_nntrain(args: &[String]) {
             }
             net = Net::from_flat(&x);
         }
-        let tl = loss(&net, &train, k, true);
-        let vl = loss(&net, &valid, k, true);
+        let tl = loss(&net, &data, &train, k, true);
+        let vl = loss(&net, &data, &valid, k, true);
         eprintln!("epoch {:3}  train {:.6}  valid {:.6}", epoch, tl, vl);
         if vl < best {
             best = vl;
