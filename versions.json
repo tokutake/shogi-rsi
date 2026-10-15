@@ -94,5 +94,13 @@
     "parent": "v11-kaede",
     "created": "2026-10-13T14:06:57Z",
     "description": "評価: gensfen 480万局面(v11と候補で各240万, 深さ5)で線形評価とNN残差を再学習"
+  },
+  {
+    "number": 13,
+    "name": "mizuho",
+    "commit": "265d924c159d543a9921809c66507e2918c45a73",
+    "parent": "v12-raiden",
+    "created": "2026-10-15T14:13:20Z",
+    "description": "評価: v12 の gensfen 240万局面で線形評価と NN 残差を v12 の重みから追加学習"
   }
 ]
