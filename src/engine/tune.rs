@@ -35,6 +35,7 @@ fn load_labels(paths: &[String], lambda: f64) -> Vec<Sample> {
                 let v = if c == BLACK { n } else { -n };
                 feats.push((idx as u16, v as i16));
             });
+            feats.shrink_to_fit(); // 数百万局面を載せるため余分な容量を返す
             out.push(Sample { feats, result: t });
         }
     }

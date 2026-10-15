@@ -10,10 +10,34 @@ use super::eval::*;
 use super::params::P;
 use super::position::*;
 
-struct Sample {
-    f: [Vec<(u16, f32)>; 2], // [手番側, 相手側] の入力特徴
-    lin: f32,                // 線形評価（手番側から見た値）
-    target: f32,
+// 入力特徴は全局面ぶんを 1 本の配列に詰めて持つ（局面ごとの Vec だと数百万局面でメモリが足りない）
+struct Samples {
+    feats: Vec<(u16, u16)>, // (特徴番号, 個数)
+    start: Vec<u64>,        // 局面 i の [手番側, 相手側] は feats[start[i]..mid[i]], feats[mid[i]..start[i+1]]
+    mid: Vec<u64>,
+    lin: Vec<f32>,          // 線形評価（手番側から見た値）
+    target: Vec<f32>,
+}
+
+impl Samples {
+    fn new() -> Samples {
+        Samples { feats: Vec::new(), start: vec![0], mid: Vec::new(), lin: Vec::new(), target: Vec::new() }
+    }
+    fn len(&self) -> usize {
+        self.lin.len()
+    }
+    fn side(&self, i: usize, side: usize) -> &[(u16, u16)] {
+        let (a, m, b) = (self.start[i] as usize, self.mid[i] as usize, self.start[i + 1] as usize);
+        if side == 0 { &self.feats[a..m] } else { &self.feats[m..b] }
+    }
+    fn push(&mut self, f: &[Vec<(u16, u16)>; 2], lin: f32, target: f32) {
+        self.feats.extend_from_slice(&f[0]);
+        self.mid.push(self.feats.len() as u64);
+        self.feats.extend_from_slice(&f[1]);
+        self.start.push(self.feats.len() as u64);
+        self.lin.push(lin);
+        self.target.push(target);
+    }
 }
 
 #[inline]
@@ -21,8 +45,11 @@ fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
-fn load(paths: &[String], lambda: f32, k: f32) -> Vec<Sample> {
-    let mut out = Vec::new();
+/// 10 局面に 1 つを検証用に回し、(学習, 検証) を返す
+fn load(paths: &[String], lambda: f32, k: f32) -> (Samples, Samples) {
+    let (mut train, mut valid) = (Samples::new(), Samples::new());
+    let mut n = 0usize;
+    let mut f: [Vec<(u16, u16)>; 2] = [Vec::with_capacity(96), Vec::with_capacity(96)];
     for path in paths {
         let Ok(text) = std::fs::read_to_string(path) else { continue };
         for line in text.lines() {
@@ -33,7 +60,8 @@ fn load(paths: &[String], lambda: f32, k: f32) -> Vec<Sample> {
             let us = pos.side;
             let res_us = if us == BLACK { res } else { 1.0 - res };
             let target = lambda * res_us + (1.0 - lambda) * sigmoid(sc * k);
-            let mut f: [Vec<(u16, f32)>; 2] = [Vec::with_capacity(96), Vec::with_capacity(96)];
+            f[0].clear();
+            f[1].clear();
             let mut lin = [0i32; 2];
             eval_terms(&pos, |c, idx, n| {
                 if idx != IDX_TEMPO {
@@ -41,14 +69,15 @@ fn load(paths: &[String], lambda: f32, k: f32) -> Vec<Sample> {
                 }
                 if let Some(i) = nn_index(idx) {
                     let side = if c == us { 0 } else { 1 };
-                    f[side].push((i as u16, n as f32));
+                    f[side].push((i as u16, n as u16));
                 }
             });
             let lin_us = (lin[us] - lin[us ^ 1] + P[IDX_TEMPO]) as f32;
-            out.push(Sample { f, lin: lin_us, target });
+            if n % 10 == 0 { &mut valid } else { &mut train }.push(&f, lin_us, target);
+            n += 1;
         }
     }
-    out
+    (train, valid)
 }
 
 struct Net {
@@ -75,10 +104,11 @@ impl Net {
             v: x[NN_IN * NN_H + NN_H..].to_vec(),
         }
     }
-    fn forward(&self, s: &Sample, h: &mut [[f32; NN_H]; 2], a: &mut [[f32; NN_H]; 2]) -> f32 {
+    fn forward(&self, d: &Samples, si: usize, h: &mut [[f32; NN_H]; 2], a: &mut [[f32; NN_H]; 2]) -> f32 {
         for side in 0..2 {
             a[side].copy_from_slice(&self.b1);
-            for &(i, n) in s.f[side].iter() {
+            for &(i, n) in d.side(si, side) {
+                let n = n as f32;
                 let row = &self.w1[i as usize * NN_H..(i as usize + 1) * NN_H];
                 for j in 0..NN_H {
                     a[side][j] += row[j] * n;
@@ -98,21 +128,22 @@ impl Net {
     }
 }
 
-fn loss(net: &Net, data: &[Sample], k: f32, use_nn: bool) -> f64 {
+fn loss(net: &Net, data: &Samples, k: f32, use_nn: bool) -> f64 {
     let nth = 4;
     let chunk = (data.len() + nth - 1) / nth;
+    let idx: Vec<usize> = (0..data.len()).collect();
     let total: f64 = std::thread::scope(|sc| {
-        let hs: Vec<_> = data
+        let hs: Vec<_> = idx
             .chunks(chunk)
             .map(|ch| {
                 sc.spawn(move || {
                     let mut h = [[0.0; NN_H]; 2];
                     let mut a = [[0.0; NN_H]; 2];
                     let mut l = 0.0f64;
-                    for s in ch {
-                        let o = if use_nn { net.forward(s, &mut h, &mut a) } else { 0.0 };
-                        let p = sigmoid(k * (s.lin + o));
-                        l += ((s.target - p) as f64).powi(2);
+                    for &si in ch {
+                        let o = if use_nn { net.forward(data, si, &mut h, &mut a) } else { 0.0 };
+                        let p = sigmoid(k * (data.lin[si] + o));
+                        l += ((data.target[si] - p) as f64).powi(2);
                     }
                     l
                 })
@@ -164,17 +195,8 @@ pub fn run_nntrain(args: &[String]) {
         }
         i += 2;
     }
-    let data = load(&labels, lambda, k);
-    eprintln!("samples: {}", data.len());
-    let mut train = Vec::new();
-    let mut valid = Vec::new();
-    for (i, s) in data.into_iter().enumerate() {
-        if i % 10 == 0 {
-            valid.push(s);
-        } else {
-            train.push(s);
-        }
-    }
+    let (train, valid) = load(&labels, lambda, k);
+    eprintln!("samples: {}", train.len() + valid.len());
     let mut rng = Rng(0x2545F4914F6CDD1D);
     let mut net = match &init {
         Some(path) => {
@@ -222,10 +244,9 @@ pub fn run_nntrain(args: &[String]) {
                             let mut h = [[0.0; NN_H]; 2];
                             let mut a = [[0.0; NN_H]; 2];
                             for &si in ch {
-                                let s = &train[si];
-                                let o = cur.forward(s, &mut h, &mut a);
-                                let p = sigmoid(k * (s.lin + o));
-                                let gout = -2.0 * (s.target - p) * p * (1.0 - p) * k;
+                                let o = cur.forward(train, si, &mut h, &mut a);
+                                let p = sigmoid(k * (train.lin[si] + o));
+                                let gout = -2.0 * (train.target[si] - p) * p * (1.0 - p) * k;
                                 for side in 0..2 {
                                     let mut da = [0.0f32; NN_H];
                                     for j in 0..NN_H {
@@ -237,7 +258,8 @@ pub fn run_nntrain(args: &[String]) {
                                     for j in 0..NN_H {
                                         g[NN_IN * NN_H + j] += da[j];
                                     }
-                                    for &(fi, n) in s.f[side].iter() {
+                                    for &(fi, n) in train.side(si, side) {
+                                        let n = n as f32;
                                         let base = fi as usize * NN_H;
                                         for j in 0..NN_H {
                                             g[base + j] += da[j] * n;
