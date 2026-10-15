@@ -7,7 +7,14 @@ const engine = fetch("./shogi_rsi.wasm")
   .then(bytes => WebAssembly.instantiate(bytes, { env: { now_ms: () => performance.now() } }))
   .then(result => result.instance.exports);
 // Report initialization failures even before the first request.
-engine.then(() => postMessage({ ready: true }), error => postMessage({ error: error.message }));
+engine.then(api => {
+  const bytes = new TextEncoder().encode("0 100 state");
+  const input = api.input_buffer(bytes.length);
+  new Uint8Array(api.memory.buffer, input, bytes.length).set(bytes);
+  const output = api.game_request();
+  const game = JSON.parse(new TextDecoder().decode(new Uint8Array(api.memory.buffer, output, api.output_len())));
+  postMessage({ ready: true, version: game.version });
+}, error => postMessage({ error: error.message }));
 onmessage = async ({ data }) => {
   try {
     const api = await engine;

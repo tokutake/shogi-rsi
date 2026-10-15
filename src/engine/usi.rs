@@ -22,7 +22,7 @@ pub fn usi_loop() {
         }
         match tokens[0] {
             "usi" => {
-                println!("id name {} {}", ENGINE_NAME, option_env!("RSI_VERSION_NAME").unwrap_or("dev"));
+                println!("id name {} {}", ENGINE_NAME, super::version_label());
                 println!("id author shogi-rsi project");
                 println!("option name USI_Hash type spin default 64 min 1 max 4096");
                 println!("usiok");
