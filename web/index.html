@@ -494,12 +494,11 @@
     async function initEngine() {
       try {
         await new Promise((resolve, reject) => {
-          worker = new Worker("./engine-worker.js");
+          worker = new Worker("./engine-worker.js?version=__RSI_VERSION_NAME__");
           const timer = setTimeout(() => reject(new Error("AIの読み込みがタイムアウトしました")), 15000);
           worker.onmessage = ({ data }) => {
             if (data.ready) {
               clearTimeout(timer);
-              $("engineVersion").textContent = data.version || "dev";
               resolve();
               return;
             }

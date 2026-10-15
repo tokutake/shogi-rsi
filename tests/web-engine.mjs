@@ -5,6 +5,12 @@ import { performance } from "node:perf_hooks";
 import vm from "node:vm";
 
 const wasm = await readFile(new URL("../dist/shogi_rsi.wasm", import.meta.url));
+const versions = JSON.parse(await readFile(new URL("../versions.json", import.meta.url), "utf8"));
+const latestVersion = versions.at(-1);
+const expectedVersion = `v${latestVersion.number}-${latestVersion.name}`;
+const page = await readFile(new URL("../dist/index.html", import.meta.url), "utf8");
+assert.ok(page.includes(`<span id="engineVersion">${expectedVersion}</span>`));
+assert.ok(page.includes(`new Worker("./engine-worker.js?version=${expectedVersion}")`));
 const { instance } = await WebAssembly.instantiate(wasm, {
   env: { now_ms: () => performance.now() },
 });
@@ -17,6 +23,7 @@ function request(body) {
   return JSON.parse(new TextDecoder().decode(new Uint8Array(api.memory.buffer, output, api.output_len())));
 }
 const initial = request("0 100 state");
+assert.equal(initial.version, expectedVersion);
 assert.equal(initial.board.length, 81);
 assert.equal(initial.legal.length, 30);
 assert.equal(request("0 100 state 7g7e").error, "Invalid game request");
@@ -36,15 +43,23 @@ assert.ok(performance.now() - started < 5000, "browser clock must stop timed sea
 let send;
 const received = new Promise(resolve => { send = resolve; });
 let ready;
-const initialized = new Promise(resolve => { ready = resolve; });
+let readyMessage;
+const initialized = new Promise(resolve => {
+  ready = message => { readyMessage = message; resolve(message); };
+});
 const context = vm.createContext({
-  WebAssembly, TextEncoder, TextDecoder, Uint8Array, performance,
-  fetch: async () => ({ ok: true, arrayBuffer: async () => wasm }),
+  WebAssembly, TextEncoder, TextDecoder, Uint8Array, URL, URLSearchParams, performance,
+  self: { location: { href: `https://example.test/shogi-rsi/engine-worker.js?version=${expectedVersion}`, search: `?version=${expectedVersion}` } },
+  fetch: async url => {
+    assert.equal(new URL(url).searchParams.get("version"), expectedVersion);
+    return { ok: true, arrayBuffer: async () => wasm };
+  },
   postMessage: message => message.ready ? ready(message) : send(message),
   onmessage: null,
 });
 vm.runInContext(await readFile(new URL("../web/engine-worker.js", import.meta.url), "utf8"), context);
 await initialized;
+assert.equal(readyMessage.version, expectedVersion);
 await context.onmessage({ data: { id: 42, body: "0 100 play 7g7f" } });
 const message = await received;
 assert.equal(message.id, 42);

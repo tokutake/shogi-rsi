@@ -1,5 +1,8 @@
 "use strict";
-const engine = fetch("./shogi_rsi.wasm")
+const wasmUrl = new URL("./shogi_rsi.wasm", self.location.href);
+const assetVersion = new URLSearchParams(self.location.search).get("version");
+if (assetVersion) wasmUrl.searchParams.set("version", assetVersion);
+const engine = fetch(wasmUrl)
   .then(response => {
     if (!response.ok) throw new Error("AIを読み込めませんでした");
     return response.arrayBuffer();
