@@ -245,7 +245,7 @@
   <main>
     <header>
       <div>
-        <small>SHOGI RSI</small>
+        <small>SHOGI RSI <span id="engineVersion">__RSI_VERSION_NAME__</span></small>
         <h1>人間 vs AI</h1>
       </div>
       <small id="engineStatus" role="status">AIを準備中…</small>
@@ -497,7 +497,12 @@
           worker = new Worker("./engine-worker.js");
           const timer = setTimeout(() => reject(new Error("AIの読み込みがタイムアウトしました")), 15000);
           worker.onmessage = ({ data }) => {
-            if (data.ready) { clearTimeout(timer); resolve(); return; }
+            if (data.ready) {
+              clearTimeout(timer);
+              $("engineVersion").textContent = data.version || "dev";
+              resolve();
+              return;
+            }
             const task = waiting.get(data.id);
             if (task) {
               waiting.delete(data.id);

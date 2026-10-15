@@ -92,6 +92,6 @@ pub fn state(body: &str) -> Result<String, &'static str> {
             .collect::<Vec<_>>()
             .join(",")
     };
-    Ok(format!("{{\"board\":{:?},\"hands\":{:?},\"side\":{},\"check\":{},\"moves\":[{}],\"legal\":[{}],\"result\":\"{}\"}}",
-        pos.board, pos.hand, pos.side, pos.in_check(), strings(moves), strings(legal.into_iter().map(move_to_usi).collect()), result))
+    Ok(format!("{{\"board\":{:?},\"hands\":{:?},\"side\":{},\"check\":{},\"moves\":[{}],\"legal\":[{}],\"result\":\"{}\",\"version\":\"{}\"}}",
+        pos.board, pos.hand, pos.side, pos.in_check(), strings(moves), strings(legal.into_iter().map(move_to_usi).collect()), result, super::version_label()))
 }

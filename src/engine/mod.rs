@@ -6,6 +6,10 @@ pub(crate) mod params;
 pub(crate) mod position;
 pub(crate) mod search;
 
+pub(crate) fn version_label() -> &'static str {
+    option_env!("RSI_VERSION_NAME").unwrap_or("dev")
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod arena;
 #[cfg(not(target_arch = "wasm32"))]
