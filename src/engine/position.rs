@@ -261,7 +261,7 @@ struct Undo {
     captured: u8,
     hash: u64,
     eval: [i32; 2],
-    nn: [[f32; super::eval::NN_H]; 2],
+    moved: u8, // 動かした（打った）駒（成る前）
 }
 
 #[derive(Clone)]
@@ -273,7 +273,10 @@ pub struct Position {
     pub hash: u64,
     pub ply: usize, // 開始局面からの手数
     pub eval: [i32; 2], // 各色の評価合計（do_move/undo_move で差分更新）
-    pub nn: [[f32; super::eval::NN_H]; 2], // NN 隠れ層の活性化前の値
+    // NN 隠れ層の活性化前の値。nn_acc[i] は i 手目の局面のもので、nn_ok[i] が真のときだけ有効。
+    // do_move では更新せず、評価するときに直近の有効な局面から差分で追いつく（遅延更新）。
+    nn_acc: Vec<[[f32; super::eval::NN_H]; 2]>,
+    nn_ok: Vec<bool>,
     history: Vec<Undo>,
 }
 
@@ -303,7 +306,8 @@ impl Position {
             hash: 0,
             ply: 0,
             eval: [0, 0],
-            nn: [[0.0; super::eval::NN_H]; 2],
+            nn_acc: Vec::with_capacity(512),
+            nn_ok: Vec::with_capacity(512),
             history: Vec::with_capacity(512),
         };
         let (mut r, mut c) = (0usize, 0usize);
@@ -370,7 +374,8 @@ impl Position {
         }
         pos.hash = pos.compute_hash();
         pos.eval = super::eval::compute_scores(&pos);
-        pos.nn = super::eval::compute_nn(&pos);
+        pos.nn_acc.push(super::eval::compute_nn(&pos));
+        pos.nn_ok.push(true);
         Some(pos)
     }
 
@@ -492,37 +497,27 @@ impl Position {
         let mut captured = EMPTY;
         let prev_hash = self.hash;
         let prev_eval = self.eval;
-        let prev_nn = self.nn;
-        let use_nn = super::eval::nn().enabled;
-        let mut king_moved = false;
+        let moved;
         if mv_is_drop(m) {
             let pt = mv_drop_pt(m);
             let n = self.hand[us][pt as usize] as usize;
             self.hash ^= z.hand[us][pt as usize][n] ^ z.hand[us][pt as usize][n - 1];
             self.hand[us][pt as usize] -= 1;
             let p = make_piece(us, pt);
+            moved = p;
             self.board[to] = p;
             self.hash ^= z.board[p as usize][to];
             self.eval[us] += super::eval::piece_score(to, p, &self.king_sq) - super::eval::hand_score(pt as usize);
-            if use_nn {
-                super::eval::nn_piece(&mut self.nn, to, p, &self.king_sq, 1.0);
-                super::eval::nn_hand(&mut self.nn[us], pt as usize, -1.0);
-            }
         } else {
             let from = mv_from(m);
             let p = self.board[from];
+            moved = p;
             captured = self.board[to];
             if captured != EMPTY {
                 self.hash ^= z.board[captured as usize][to];
                 self.eval[us ^ 1] -= super::eval::piece_score(to, captured, &self.king_sq);
-                if use_nn {
-                    super::eval::nn_piece(&mut self.nn, to, captured, &self.king_sq, -1.0);
-                }
                 let cpt = unpromote(ptype(captured)) as usize;
                 self.eval[us] += super::eval::hand_score(cpt);
-                if use_nn {
-                    super::eval::nn_hand(&mut self.nn[us], cpt, 1.0);
-                }
                 let n = self.hand[us][cpt] as usize;
                 self.hash ^= z.hand[us][cpt][n] ^ z.hand[us][cpt][n + 1];
                 self.hand[us][cpt] += 1;
@@ -534,25 +529,77 @@ impl Position {
             self.hash ^= z.board[np as usize][to];
             if ptype(p) == KING {
                 self.king_sq[us] = to;
-                king_moved = true;
-            }
-            if king_moved {
-                let (e, n) = super::eval::compute_all(self);
-                self.eval = e;
-                self.nn = n;
+                self.eval = super::eval::compute_scores(self);
             } else {
                 self.eval[us] += super::eval::piece_score(to, np, &self.king_sq)
                     - super::eval::piece_score(from, p, &self.king_sq);
-                if use_nn {
-                    super::eval::nn_piece(&mut self.nn, from, p, &self.king_sq, -1.0);
-                    super::eval::nn_piece(&mut self.nn, to, np, &self.king_sq, 1.0);
-                }
             }
         }
         self.hash ^= z.side;
         self.side ^= 1;
         self.ply += 1;
-        self.history.push(Undo { mv: m, captured, hash: prev_hash, eval: prev_eval, nn: prev_nn });
+        self.history.push(Undo { mv: m, captured, hash: prev_hash, eval: prev_eval, moved });
+        self.push_nn_slot();
+    }
+
+    #[inline]
+    fn push_nn_slot(&mut self) {
+        let i = self.history.len();
+        if self.nn_ok.len() <= i {
+            self.nn_ok.push(false);
+            self.nn_acc.push([[0.0; super::eval::NN_H]; 2]);
+        } else {
+            self.nn_ok[i] = false;
+        }
+    }
+
+    /// 現局面の NN 隠れ層（活性化前）を返す。必要なら直近の有効な局面から差分更新する。
+    pub fn nn_acc(&mut self) -> &[[f32; super::eval::NN_H]; 2] {
+        let cur = self.history.len();
+        if !self.nn_ok[cur] {
+            // 有効な祖先を探す。途中で玉が動いていたら全計算
+            let mut j = cur;
+            let mut refresh = false;
+            while !self.nn_ok[j] {
+                let u = &self.history[j - 1];
+                if u.mv != NO_MOVE && !mv_is_drop(u.mv) && ptype(u.moved) == KING {
+                    refresh = true;
+                    break;
+                }
+                j -= 1;
+            }
+            if refresh {
+                self.nn_acc[cur] = super::eval::compute_nn(self);
+            } else {
+                // 玉は j..cur の間動いていないので現在の玉位置で差分を計算できる
+                let ksq = self.king_sq;
+                for k in j + 1..=cur {
+                    let mut acc = self.nn_acc[k - 1];
+                    let u = &self.history[k - 1];
+                    let m = u.mv;
+                    if m != NO_MOVE {
+                        let c = color_of(u.moved);
+                        let to = mv_to(m);
+                        if mv_is_drop(m) {
+                            super::eval::nn_piece(&mut acc, to, u.moved, &ksq, 1.0);
+                            super::eval::nn_hand(&mut acc[c], ptype(u.moved) as usize, -1.0);
+                        } else {
+                            if u.captured != EMPTY {
+                                super::eval::nn_piece(&mut acc, to, u.captured, &ksq, -1.0);
+                                super::eval::nn_hand(&mut acc[c], unpromote(ptype(u.captured)) as usize, 1.0);
+                            }
+                            let np = if mv_is_promo(m) { make_piece(c, promote(ptype(u.moved))) } else { u.moved };
+                            super::eval::nn_piece(&mut acc, mv_from(m), u.moved, &ksq, -1.0);
+                            super::eval::nn_piece(&mut acc, to, np, &ksq, 1.0);
+                        }
+                    }
+                    self.nn_acc[k] = acc;
+                    self.nn_ok[k] = true;
+                }
+            }
+            self.nn_ok[cur] = true;
+        }
+        &self.nn_acc[cur]
     }
 
     pub fn undo_move(&mut self) {
@@ -581,7 +628,6 @@ impl Position {
         }
         self.hash = u.hash;
         self.eval = u.eval;
-        self.nn = u.nn;
     }
 
     pub fn do_null_move(&mut self) {
@@ -589,7 +635,8 @@ impl Position {
         self.hash ^= zobrist().side;
         self.side ^= 1;
         self.ply += 1;
-        self.history.push(Undo { mv: NO_MOVE, captured: EMPTY, hash: prev, eval: self.eval, nn: self.nn });
+        self.history.push(Undo { mv: NO_MOVE, captured: EMPTY, hash: prev, eval: self.eval, moved: EMPTY });
+        self.push_nn_slot();
     }
 
     pub fn undo_null_move(&mut self) {

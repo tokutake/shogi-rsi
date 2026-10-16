@@ -131,11 +131,11 @@ pub fn hand_score(pt: usize) -> i32 {
 }
 
 #[inline]
-pub fn evaluate(pos: &Position) -> i32 {
+pub fn evaluate(pos: &mut Position) -> i32 {
     let us = pos.side;
     let lin = pos.eval[us] - pos.eval[us ^ 1] + P[IDX_TEMPO];
     if nn().enabled {
-        lin + nn_output(&pos.nn, us) as i32
+        lin + nn_output(pos.nn_acc(), us) as i32
     } else {
         lin
     }
@@ -211,25 +211,6 @@ pub fn compute_nn(pos: &Position) -> [[f32; NN_H]; 2] {
         }
     });
     acc
-}
-
-/// 線形評価と NN 隠れ層を 1 回の走査でまとめて再計算する（玉が動いたとき用）
-pub fn compute_all(pos: &Position) -> ([i32; 2], [[f32; NN_H]; 2]) {
-    let n = nn();
-    let mut score = [0i32; 2];
-    let mut acc = [n.b1, n.b1];
-    let use_nn = n.enabled;
-    eval_terms(pos, |c, idx, k| {
-        if idx != IDX_TEMPO {
-            score[c] += P[idx] * k;
-        }
-        if use_nn {
-            if let Some(i) = nn_index(idx) {
-                nn_axpy(&mut acc[c], &n.w1[i], k as f32);
-            }
-        }
-    });
-    (score, acc)
 }
 
 /// 盤上の駒 1 枚の NN 寄与を加減算する（sign = +1 / -1）
