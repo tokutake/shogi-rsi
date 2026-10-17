@@ -133,7 +133,8 @@ pub fn hand_score(pt: usize) -> i32 {
 #[inline]
 pub fn evaluate(pos: &mut Position) -> i32 {
     let us = pos.side;
-    let lin = pos.eval[us] - pos.eval[us ^ 1] + P[IDX_TEMPO];
+    let e = pos.lin_scores();
+    let lin = e[us] - e[us ^ 1] + P[IDX_TEMPO];
     if nn().enabled {
         lin + nn_output(pos.nn_acc(), us) as i32
     } else {

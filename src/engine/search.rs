@@ -274,6 +274,13 @@ impl Searcher {
             }
         }
         if mv_is_drop(m) && mv_drop_pt(m) == PAWN {
+            // 打ち歩詰めになりうるのは敵玉の頭に打つ歩だけ
+            let to = mv_to(m);
+            let head = if pos.side == BLACK { to == pos.king_sq[pos.side ^ 1] + 9 } else { to + 9 == pos.king_sq[pos.side ^ 1] };
+            if safe && !head {
+                pos.do_move(m);
+                return true;
+            }
             if !pos.is_legal(m) {
                 return false;
             }
@@ -529,5 +536,21 @@ impl Searcher {
             return -MATE + ply as i32;
         }
         best
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_pawn_drop_mate() {
+        // P*1b は打ち歩詰めなので指してはいけない
+        let mut pos = Position::from_sfen("7nk/9/7G1/9/9/9/9/9/K8 b P 1").unwrap();
+        let mut s = Searcher::new(1);
+        s.verbose = false;
+        let r = s.search(&mut pos, &Limits { time_ms: None, depth: Some(5), nodes: None });
+        assert_ne!(move_to_usi(r.best), "P*1b");
+        assert!(r.score < MATE - 1000);
     }
 }
