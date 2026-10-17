@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-title" content="将棋RSI" />
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
-  <title>shogi-rsi — 人間 vs AI</title>
+  <title>将棋RSI</title>
   <style>
     :root {
       color-scheme: light;
@@ -246,9 +246,9 @@
     <header>
       <div>
         <small>SHOGI RSI <span id="engineVersion">__RSI_VERSION_NAME__</span></small>
-        <h1>人間 vs AI</h1>
+        <h1>将棋RSI</h1>
       </div>
-      <small id="engineStatus" role="status">AIを準備中…</small>
+      <small id="engineStatus" role="status"></small>
     </header>
     <div class="layout">
       <section class="panel" aria-label="将棋盤">
@@ -295,7 +295,6 @@
     </div>
     <footer>
       千日手・320手は引き分け。連続王手の千日手の反則判定と入玉宣言は未対応。対局はこの端末に自動保存されます。
-      <p id="offlineStatus" role="status">オフライン利用にはHTTPSで開いてください。</p>
       <p>iPhoneではSafariの共有メニューから「ホーム画面に追加」で起動できます。</p>
     </footer>
   </main>
@@ -516,11 +515,11 @@
             waiting.clear();
           };
         });
-        $("engineStatus").textContent = "端末内AI";
+        $("engineStatus").textContent = "";
       } catch {
         worker?.terminate();
         worker = null;
-        $("engineStatus").textContent = "PC接続のAI";
+        $("engineStatus").textContent = "";
       }
     }
     function localGame(body) {
@@ -616,20 +615,16 @@
       }
       if (worker && "serviceWorker" in navigator && window.isSecureContext) {
         try {
-          $("offlineStatus").textContent = "オフライン用データを保存中…";
           await navigator.serviceWorker.register("./sw.js");
           let offlineTimer;
-          const registration = await Promise.race([
+          await Promise.race([
             navigator.serviceWorker.ready,
             new Promise((_, reject) => {
               offlineTimer = setTimeout(() => reject(new Error("Offline cache timeout")), 15000);
             }),
           ]).finally(() => clearTimeout(offlineTimer));
           // ready resolves only after the entire offline bundle is installed.
-          if (registration.active) $("offlineStatus").textContent = "オフライン準備完了。外出先でも通信なしで遊べます。";
-        } catch {
-          $("offlineStatus").textContent = "オフライン保存に失敗しました。通信できる場所で開き直してください。";
-        }
+        } catch { /* Offline support is optional. */ }
       }
     }
     start();
