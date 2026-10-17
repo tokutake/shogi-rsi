@@ -110,5 +110,13 @@
     "parent": "v13-mizuho",
     "created": "2026-10-16T15:34:04Z",
     "description": "高速化: NN 隠れ層の遅延差分更新（探索は v13 と同一、NPS 約+20%）"
+  },
+  {
+    "number": 15,
+    "name": "oboro",
+    "commit": "8ccb498a6d35470126ca82ac2ccba4aac363629e",
+    "parent": "v14-nagi",
+    "created": "2026-10-17T11:56:11Z",
+    "description": "評価: v14 で生成した gensfen 深さ6・120万局面で線形評価と NN 残差を v14 から追加学習 / 高速化: 玉移動後の線形評価の遅延全計算・歩打ちの合法性チェック省略"
   }
 ]

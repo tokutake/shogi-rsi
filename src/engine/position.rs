@@ -261,6 +261,7 @@ struct Undo {
     captured: u8,
     hash: u64,
     eval: [i32; 2],
+    eval_dirty: bool,
     moved: u8, // 動かした（打った）駒（成る前）
 }
 
@@ -272,7 +273,9 @@ pub struct Position {
     pub king_sq: [usize; 2],
     pub hash: u64,
     pub ply: usize, // 開始局面からの手数
-    pub eval: [i32; 2], // 各色の評価合計（do_move/undo_move で差分更新）
+    // 各色の評価合計（do_move/undo_move で差分更新）。玉が動くと eval_dirty にして、評価するときに全計算する。
+    eval: [i32; 2],
+    eval_dirty: bool,
     // NN 隠れ層の活性化前の値。nn_acc[i] は i 手目の局面のもので、nn_ok[i] が真のときだけ有効。
     // do_move では更新せず、評価するときに直近の有効な局面から差分で追いつく（遅延更新）。
     nn_acc: Vec<[[f32; super::eval::NN_H]; 2]>,
@@ -306,6 +309,7 @@ impl Position {
             hash: 0,
             ply: 0,
             eval: [0, 0],
+            eval_dirty: false,
             nn_acc: Vec::with_capacity(512),
             nn_ok: Vec::with_capacity(512),
             history: Vec::with_capacity(512),
@@ -497,6 +501,8 @@ impl Position {
         let mut captured = EMPTY;
         let prev_hash = self.hash;
         let prev_eval = self.eval;
+        let prev_dirty = self.eval_dirty;
+        let dirty = self.eval_dirty;
         let moved;
         if mv_is_drop(m) {
             let pt = mv_drop_pt(m);
@@ -507,7 +513,9 @@ impl Position {
             moved = p;
             self.board[to] = p;
             self.hash ^= z.board[p as usize][to];
-            self.eval[us] += super::eval::piece_score(to, p, &self.king_sq) - super::eval::hand_score(pt as usize);
+            if !dirty {
+                self.eval[us] += super::eval::piece_score(to, p, &self.king_sq) - super::eval::hand_score(pt as usize);
+            }
         } else {
             let from = mv_from(m);
             let p = self.board[from];
@@ -515,9 +523,11 @@ impl Position {
             captured = self.board[to];
             if captured != EMPTY {
                 self.hash ^= z.board[captured as usize][to];
-                self.eval[us ^ 1] -= super::eval::piece_score(to, captured, &self.king_sq);
                 let cpt = unpromote(ptype(captured)) as usize;
-                self.eval[us] += super::eval::hand_score(cpt);
+                if !dirty {
+                    self.eval[us ^ 1] -= super::eval::piece_score(to, captured, &self.king_sq);
+                    self.eval[us] += super::eval::hand_score(cpt);
+                }
                 let n = self.hand[us][cpt] as usize;
                 self.hash ^= z.hand[us][cpt][n] ^ z.hand[us][cpt][n + 1];
                 self.hand[us][cpt] += 1;
@@ -529,8 +539,8 @@ impl Position {
             self.hash ^= z.board[np as usize][to];
             if ptype(p) == KING {
                 self.king_sq[us] = to;
-                self.eval = super::eval::compute_scores(self);
-            } else {
+                self.eval_dirty = true;
+            } else if !dirty {
                 self.eval[us] += super::eval::piece_score(to, np, &self.king_sq)
                     - super::eval::piece_score(from, p, &self.king_sq);
             }
@@ -538,7 +548,7 @@ impl Position {
         self.hash ^= z.side;
         self.side ^= 1;
         self.ply += 1;
-        self.history.push(Undo { mv: m, captured, hash: prev_hash, eval: prev_eval, moved });
+        self.history.push(Undo { mv: m, captured, hash: prev_hash, eval: prev_eval, eval_dirty: prev_dirty, moved });
         self.push_nn_slot();
     }
 
@@ -628,6 +638,17 @@ impl Position {
         }
         self.hash = u.hash;
         self.eval = u.eval;
+        self.eval_dirty = u.eval_dirty;
+    }
+
+    /// 各色の線形評価の合計（玉が動いた後なら全計算する）
+    #[inline]
+    pub fn lin_scores(&mut self) -> [i32; 2] {
+        if self.eval_dirty {
+            self.eval = super::eval::compute_scores(self);
+            self.eval_dirty = false;
+        }
+        self.eval
     }
 
     pub fn do_null_move(&mut self) {
@@ -635,7 +656,7 @@ impl Position {
         self.hash ^= zobrist().side;
         self.side ^= 1;
         self.ply += 1;
-        self.history.push(Undo { mv: NO_MOVE, captured: EMPTY, hash: prev, eval: self.eval, moved: EMPTY });
+        self.history.push(Undo { mv: NO_MOVE, captured: EMPTY, hash: prev, eval: self.eval, eval_dirty: self.eval_dirty, moved: EMPTY });
         self.push_nn_slot();
     }
 
@@ -841,24 +862,36 @@ impl Position {
         if hand.iter().all(|&n| n == 0) {
             return;
         }
+        // 空き升と自分の歩のある筋を 1 回の走査で集める
+        let own_pawn = make_piece(us, PAWN);
         let mut pawn_files = [false; 9];
-        if hand[PAWN as usize] > 0 {
-            for sq in 0..81 {
-                if self.board[sq] == make_piece(us, PAWN) {
-                    pawn_files[sq % 9] = true;
-                }
+        let mut empties = [0u8; 81];
+        let mut ne = 0;
+        for sq in 0..81 {
+            let p = self.board[sq];
+            if p == EMPTY {
+                empties[ne] = sq as u8;
+                ne += 1;
+            } else if p == own_pawn {
+                pawn_files[sq % 9] = true;
             }
         }
+        let empties = &empties[..ne];
         for pt in PAWN..=ROOK {
             if hand[pt as usize] == 0 {
                 continue;
             }
-            for to in 0..81 {
-                if self.board[to] != EMPTY {
-                    continue;
-                }
-                let tr = (to / 9) as i32;
-                if Self::dead_end(us, pt, tr) {
+            // 行き所のない段には打てない（先手は上端、後手は下端から何段か）
+            let dead = match pt {
+                PAWN | LANCE => 1,
+                KNIGHT => 2,
+                _ => 0,
+            };
+            let (lo, hi) = if us == BLACK { (dead * 9, 81) } else { (0, 81 - dead * 9) };
+            list.reserve(ne);
+            for &to in empties {
+                let to = to as usize;
+                if to < lo || to >= hi {
                     continue;
                 }
                 if pt == PAWN && pawn_files[to % 9] {
@@ -944,3 +977,4 @@ impl Position {
         self.board.iter().filter(|&&p| p != EMPTY).count()
     }
 }
+
