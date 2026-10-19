@@ -1,0 +1,108 @@
+diff --git a/src/engine/search.rs b/src/engine/search.rs
+index 96d9b39..1a56285 100644
+--- a/src/engine/search.rs
++++ b/src/engine/search.rs
+@@ -76,6 +76,7 @@ pub struct Searcher {
+     killers: [[Move; 2]; MAX_PLY + 1],
+     evals: [i32; MAX_PLY + 2],
+     history: Vec<i32>, // [piece(32)][to(81)]
++    excluded: [Move; MAX_PLY + 2],
+     pub verbose: bool,
+     scratch: Vec<(i32, Move)>,
+     move_bufs: Vec<Vec<Move>>,
+@@ -115,6 +116,7 @@ impl Searcher {
+             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
+             evals: [-INF; MAX_PLY + 2],
+             history: vec![0; 32 * 81],
++            excluded: [NO_MOVE; MAX_PLY + 2],
+             verbose: true,
+             scratch: Vec::with_capacity(256),
+             move_bufs: vec![Vec::with_capacity(160); MAX_PLY + 2],
+@@ -312,8 +314,10 @@ impl Searcher {
+             return evaluate(pos);
+         }
+         let key = pos.key();
++        let excluded = self.excluded[ply];
+         let mut tt_move = NO_MOVE;
+-        if let Some(e) = self.tt.probe(key) {
++        let tt_entry = if excluded == NO_MOVE { self.tt.probe(key) } else { None };
++        if let Some(e) = tt_entry {
+             tt_move = e.mv;
+             if !pv && ply > 0 && e.depth as i32 >= depth {
+                 let s = score_from_tt(e.score, ply);
+@@ -336,13 +340,36 @@ impl Searcher {
+         self.evals[ply] = static_eval;
+         let improving = !in_check && ply >= 2 && self.evals[ply - 2] != -INF && static_eval > self.evals[ply - 2];
+ 
++        // Singular extension: TT 手だけが他の手より明らかに良ければ、その手を 1 手延長する
++        let mut singular_ext = false;
++        if let Some(e) = tt_entry {
++            let tt_score = score_from_tt(e.score, ply);
++            if ply > 0 && depth >= 6 && e.mv != NO_MOVE && (e.flag == 1 || e.flag == 2)
++                && e.depth as i32 >= depth - 3 && tt_score.abs() < MATE - 1000
++            {
++                let sbeta = tt_score - 2 * depth;
++                self.excluded[ply] = e.mv;
++                let s = self.negamax(pos, (depth - 1) / 2, ply, sbeta - 1, sbeta, false);
++                self.excluded[ply] = NO_MOVE;
++                if self.stopped {
++                    return 0;
++                }
++                if s < sbeta {
++                    singular_ext = true;
++                } else if sbeta >= beta {
++                    // Multi-cut: TT 手以外でも beta を超える
++                    return sbeta;
++                }
++            }
++        }
++
+         // Reverse futility pruning（静的評価が beta を大きく上回るなら打ち切り）
+-        if !pv && !in_check && depth <= 3 && ply > 0 && beta.abs() < MATE - 1000 && static_eval - 150 * depth >= beta {
++        if excluded == NO_MOVE && !pv && !in_check && depth <= 3 && ply > 0 && beta.abs() < MATE - 1000 && static_eval - 150 * depth >= beta {
+             return static_eval;
+         }
+ 
+         // Null move pruning
+-        if !pv && !in_check && depth >= 3 && ply > 0 && beta.abs() < MATE - 1000 && pos.last_move() != NO_MOVE {
++        if excluded == NO_MOVE && !pv && !in_check && depth >= 3 && ply > 0 && beta.abs() < MATE - 1000 && pos.last_move() != NO_MOVE {
+             if static_eval >= beta {
+                 let r = 2 + depth / 4;
+                 pos.do_null_move();
+@@ -370,6 +397,9 @@ impl Searcher {
+         let mut quiets_tried = std::mem::take(&mut self.quiet_bufs[ply]);
+         quiets_tried.clear();
+         for &m in moves.iter() {
++            if m == excluded {
++                continue;
++            }
+             let quiet = !mv_is_promo(m) && (mv_is_drop(m) || pos.board[mv_to(m)] == EMPTY);
+             let hidx = Self::hist_idx(pos, m);
+             if !self.try_move(pos, m, !in_check, pinned) {
+@@ -392,8 +422,9 @@ impl Searcher {
+                 continue;
+             }
+             let mut score;
++            let ext = (singular_ext && m == tt_move) as i32;
+             if legal == 1 {
+-                score = -self.negamax(pos, depth - 1, ply + 1, -beta, -alpha, pv);
++                score = -self.negamax(pos, depth - 1 + ext, ply + 1, -beta, -alpha, pv);
+             } else {
+                 // Late move reduction
+                 let mut r = 0;
+@@ -456,9 +487,15 @@ impl Searcher {
+         self.move_bufs[ply] = moves;
+         self.quiet_bufs[ply] = quiets_tried;
+         if legal == 0 {
++            if excluded != NO_MOVE {
++                return alpha;
++            }
+             // 詰み（将棋では手がない＝負け）
+             return -MATE + ply as i32;
+         }
++        if excluded != NO_MOVE {
++            return best_score;
++        }
+         let flag = if best_score >= beta {
+             2
+         } else if best_score > orig_alpha {
