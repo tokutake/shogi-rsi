@@ -142,5 +142,13 @@
     "parent": "v17-rindo",
     "created": "2026-10-20T12:09:57Z",
     "description": "評価: v17 で生成した gensfen 深さ6・120万局面で線形評価と NN 残差を v17 から追加学習（NN 4 epoch）"
+  },
+  {
+    "number": 19,
+    "name": "tsubaki",
+    "commit": "ba5256075e56a8204bf5bf0960a4a1ac8d93c31b",
+    "parent": "v18-sakura",
+    "created": "2026-10-22T12:29:10Z",
+    "description": "評価: v18 で生成した gensfen 深さ6・123万局面で線形評価と NN 残差を v18 から追加学習（NN 2 epoch）"
   }
 ]
