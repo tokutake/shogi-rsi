@@ -344,7 +344,7 @@ impl Searcher {
         // Null move pruning
         if !pv && !in_check && depth >= 3 && ply > 0 && beta.abs() < MATE - 1000 && pos.last_move() != NO_MOVE {
             if static_eval >= beta {
-                let r = 3 + depth / 3 + ((static_eval - beta) / 200).min(3);
+                let r = 2 + depth / 4;
                 pos.do_null_move();
                 let score = -self.negamax(pos, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
                 pos.undo_null_move();
