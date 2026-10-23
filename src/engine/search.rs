@@ -74,6 +74,8 @@ pub struct Searcher {
     time_ms: Option<u64>,
     node_limit: Option<u64>,
     stopped: bool,
+    /// 現在の反復で、ルートで alpha を更新した（最後まで読めた）手
+    root_best: Move,
     killers: [[Move; 2]; MAX_PLY + 1],
     evals: [i32; MAX_PLY + 2],
     history: Vec<i32>, // [piece(32)][to(81)]
@@ -113,6 +115,7 @@ impl Searcher {
             time_ms: None,
             node_limit: None,
             stopped: false,
+            root_best: NO_MOVE,
             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
             evals: [-INF; MAX_PLY + 2],
             history: vec![0; 32 * 81],
@@ -167,6 +170,7 @@ impl Searcher {
                 (-INF, INF)
             };
             let mut score;
+            self.root_best = NO_MOVE;
             loop {
                 score = self.negamax(pos, depth, 0, lo, hi, true);
                 if self.stopped {
@@ -182,6 +186,10 @@ impl Searcher {
                 delta *= 2;
             }
             if self.stopped && depth > 1 {
+                // 途中で打ち切った反復でも、最後まで読めて前回の最善手より良いと分かった手は使う
+                if self.root_best != NO_MOVE {
+                    best = self.root_best;
+                }
                 break;
             }
             if let Some(e) = self.tt.probe(pos.key()) {
@@ -437,6 +445,9 @@ impl Searcher {
                 best_move = m;
                 if score > alpha {
                     alpha = score;
+                    if ply == 0 {
+                        self.root_best = m;
+                    }
                     if alpha >= beta {
                         if quiet {
                             if self.killers[ply][0] != m {
