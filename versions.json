@@ -150,5 +150,13 @@
     "parent": "v18-sakura",
     "created": "2026-10-22T12:29:10Z",
     "description": "評価: v18 で生成した gensfen 深さ6・123万局面で線形評価と NN 残差を v18 から追加学習（NN 2 epoch）"
+  },
+  {
+    "number": 20,
+    "name": "ukon",
+    "commit": "b4923eee0724fc04561b0feeba476661af074162",
+    "parent": "v19-tsubaki",
+    "created": "2026-10-23T12:31:58Z",
+    "description": "探索: 時間切れで打ち切った反復でも、ルートで alpha を更新した手を最善手に使う / 高速化: 静的評価を置換表に保存"
   }
 ]

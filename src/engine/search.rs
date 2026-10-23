@@ -16,6 +16,7 @@ struct TTEntry {
     key: u64,
     mv: Move,
     score: i32,
+    eval: i16,
     depth: i8,
     flag: u8, // 0 none, 1 exact, 2 lower, 3 upper
 }
@@ -45,10 +46,10 @@ impl TT {
         }
     }
     #[inline]
-    fn store(&mut self, key: u64, mv: Move, score: i32, depth: i32, flag: u8) {
+    fn store(&mut self, key: u64, mv: Move, score: i32, eval: i32, depth: i32, flag: u8) {
         let e = &mut self.table[(key as usize) & self.mask];
         if e.key != key || depth as i8 >= e.depth || flag == 1 {
-            *e = TTEntry { key, mv, score, depth: depth as i8, flag };
+            *e = TTEntry { key, mv, score, eval: eval.clamp(-32000, 32000) as i16, depth: depth as i8, flag };
         }
     }
 }
@@ -73,6 +74,8 @@ pub struct Searcher {
     time_ms: Option<u64>,
     node_limit: Option<u64>,
     stopped: bool,
+    /// 現在の反復で、ルートで alpha を更新した（最後まで読めた）手
+    root_best: Move,
     killers: [[Move; 2]; MAX_PLY + 1],
     evals: [i32; MAX_PLY + 2],
     history: Vec<i32>, // [piece(32)][to(81)]
@@ -112,6 +115,7 @@ impl Searcher {
             time_ms: None,
             node_limit: None,
             stopped: false,
+            root_best: NO_MOVE,
             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
             evals: [-INF; MAX_PLY + 2],
             history: vec![0; 32 * 81],
@@ -166,6 +170,7 @@ impl Searcher {
                 (-INF, INF)
             };
             let mut score;
+            self.root_best = NO_MOVE;
             loop {
                 score = self.negamax(pos, depth, 0, lo, hi, true);
                 if self.stopped {
@@ -181,6 +186,10 @@ impl Searcher {
                 delta *= 2;
             }
             if self.stopped && depth > 1 {
+                // 途中で打ち切った反復でも、最後まで読めて前回の最善手より良いと分かった手は使う
+                if self.root_best != NO_MOVE {
+                    best = self.root_best;
+                }
                 break;
             }
             if let Some(e) = self.tt.probe(pos.key()) {
@@ -313,8 +322,10 @@ impl Searcher {
         }
         let key = pos.key();
         let mut tt_move = NO_MOVE;
+        let mut tt_eval = -INF;
         if let Some(e) = self.tt.probe(key) {
             tt_move = e.mv;
+            tt_eval = e.eval as i32;
             if !pv && ply > 0 && e.depth as i32 >= depth {
                 let s = score_from_tt(e.score, ply);
                 match e.flag {
@@ -332,7 +343,8 @@ impl Searcher {
             depth -= 1;
         }
 
-        let static_eval = if in_check { -INF } else { evaluate(pos) };
+        // 静的評価は置換表に保存しておき、再訪時は評価関数を呼ばない（玉移動後は子が全計算を繰り返さないよう評価する）
+        let static_eval = if in_check { -INF } else if tt_eval != -INF && !pos.eval_dirty() { tt_eval } else { evaluate(pos) };
         self.evals[ply] = static_eval;
         let improving = !in_check && ply >= 2 && self.evals[ply - 2] != -INF && static_eval > self.evals[ply - 2];
 
@@ -433,6 +445,9 @@ impl Searcher {
                 best_move = m;
                 if score > alpha {
                     alpha = score;
+                    if ply == 0 {
+                        self.root_best = m;
+                    }
                     if alpha >= beta {
                         if quiet {
                             if self.killers[ply][0] != m {
@@ -466,7 +481,7 @@ impl Searcher {
         } else {
             3
         };
-        self.tt.store(key, best_move, score_to_tt(best_score, ply), depth, flag);
+        self.tt.store(key, best_move, score_to_tt(best_score, ply), static_eval, depth, flag);
         best_score
     }
 

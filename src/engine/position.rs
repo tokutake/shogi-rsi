@@ -641,6 +641,12 @@ impl Position {
         self.eval_dirty = u.eval_dirty;
     }
 
+    /// 玉が動いた後で、線形評価の全計算が済んでいない
+    #[inline]
+    pub fn eval_dirty(&self) -> bool {
+        self.eval_dirty
+    }
+
     /// 各色の線形評価の合計（玉が動いた後なら全計算する）
     #[inline]
     pub fn lin_scores(&mut self) -> [i32; 2] {
