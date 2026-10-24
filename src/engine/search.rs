@@ -337,7 +337,8 @@ impl Searcher {
             }
         }
         let in_check = pos.in_check();
-        let mut depth = if in_check { depth + 1 } else { depth };
+        // 王手延長（PV 以外では、駒打ちの王手は延長しない。打つ王手は数が多く木が膨らむ）
+        let mut depth = if in_check && (pv || !mv_is_drop(pos.last_move())) { depth + 1 } else { depth };
         // Internal iterative reduction: TT 手がない深いノードは 1 浅く読む
         if tt_move == NO_MOVE && depth >= 4 && !in_check {
             depth -= 1;
