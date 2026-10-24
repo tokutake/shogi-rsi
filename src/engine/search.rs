@@ -403,6 +403,14 @@ impl Searcher {
                 pos.undo_move();
                 continue;
             }
+            // 浅い深さで、相手の利きがあり自分の利きがない升へ駒をただで捨てる静かな手は読まない
+            if !pv && !in_check && !gives_check && quiet && depth <= 3 && legal > 1 && best_score > -MATE + 1000 {
+                let to = mv_to(m);
+                if pos.is_attacked(to, pos.side) && !pos.is_attacked(to, pos.side ^ 1) {
+                    pos.undo_move();
+                    continue;
+                }
+            }
             let mut score;
             if legal == 1 {
                 score = -self.negamax(pos, depth - 1, ply + 1, -beta, -alpha, pv);
