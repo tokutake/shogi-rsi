@@ -79,8 +79,6 @@ pub struct Searcher {
     killers: [[Move; 2]; MAX_PLY + 1],
     evals: [i32; MAX_PLY + 2],
     history: Vec<i32>, // [piece(32)][to(81)]
-    /// 直前の手（動いた駒×移動先）に対して beta カットした静かな手
-    counter: Vec<Move>,
     pub verbose: bool,
     scratch: Vec<(i32, Move)>,
     move_bufs: Vec<Vec<Move>>,
@@ -121,7 +119,6 @@ impl Searcher {
             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
             evals: [-INF; MAX_PLY + 2],
             history: vec![0; 32 * 81],
-            counter: vec![NO_MOVE; 32 * 81],
             verbose: true,
             scratch: Vec::with_capacity(256),
             move_bufs: vec![Vec::with_capacity(160); MAX_PLY + 2],
@@ -236,7 +233,6 @@ impl Searcher {
     fn order_moves(&mut self, pos: &Position, moves: &mut [Move], tt_move: Move, ply: usize) {
         let mut scored = std::mem::take(&mut self.scratch);
         scored.clear();
-        let cm = self.counter_move(pos);
         scored.extend(moves.iter().map(|&m| {
                 let s = if m == tt_move {
                     1_000_000
@@ -253,8 +249,6 @@ impl Searcher {
                     90_000
                 } else if ply <= MAX_PLY && (self.killers[ply][0] == m || self.killers[ply][1] == m) {
                     80_000
-                } else if m == cm {
-                    75_000
                 } else {
                     self.history[Self::hist_idx(pos, m)].min(70_000)
                 };
@@ -265,20 +259,6 @@ impl Searcher {
             moves[i] = m;
         }
         self.scratch = scored;
-    }
-
-    #[inline]
-    fn counter_idx(pos: &Position) -> Option<usize> {
-        let last = pos.last_move();
-        if last == NO_MOVE {
-            return None;
-        }
-        Some(pos.board[mv_to(last)] as usize * 81 + mv_to(last))
-    }
-
-    #[inline]
-    fn counter_move(&self, pos: &Position) -> Move {
-        Self::counter_idx(pos).map_or(NO_MOVE, |i| self.counter[i])
     }
 
     #[inline]
@@ -475,9 +455,6 @@ impl Searcher {
                                 self.killers[ply][0] = m;
                             }
                             self.history[hidx] += depth * depth;
-                            if let Some(ci) = Self::counter_idx(pos) {
-                                self.counter[ci] = m;
-                            }
                             for &q in quiets_tried.iter() {
                                 let qi = Self::hist_idx(pos, q);
                                 self.history[qi] -= depth * depth / 2;
