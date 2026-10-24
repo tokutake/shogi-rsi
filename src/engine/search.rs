@@ -337,7 +337,7 @@ impl Searcher {
             }
         }
         let in_check = pos.in_check();
-        let mut depth = if in_check { depth + 1 } else { depth };
+        let mut depth = if in_check && pv { depth + 1 } else { depth };
         // Internal iterative reduction: TT 手がない深いノードは 1 浅く読む
         if tt_move == NO_MOVE && depth >= 4 && !in_check {
             depth -= 1;
