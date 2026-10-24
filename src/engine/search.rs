@@ -150,7 +150,7 @@ impl Searcher {
         self.node_limit = limits.nodes;
         self.killers = [[NO_MOVE; 2]; MAX_PLY + 1];
         for h in self.history.iter_mut() {
-            *h /= 8;
+            *h /= 2;
         }
         let max_depth = limits.depth.unwrap_or(64).min(MAX_PLY as i32 - 10);
 
