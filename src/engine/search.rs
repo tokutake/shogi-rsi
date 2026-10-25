@@ -389,7 +389,8 @@ impl Searcher {
                 continue;
             }
             legal += 1;
-            let gives_check = pos.in_check();
+            // 駒打ちの王手は数が多く大半は無駄なので、枝刈り・LMR の対象外にしない
+            let gives_check = !mv_is_drop(m) && pos.in_check();
             // Late move pruning: 浅い深さで後半の静かな手は読まない
             if !pv && !in_check && !gives_check && quiet && depth <= 3 && legal > (8 + 4 * depth * depth) / (2 - improving as i32)
                 && best_score > -MATE + 1000
