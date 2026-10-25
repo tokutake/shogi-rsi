@@ -410,8 +410,7 @@ impl Searcher {
             } else {
                 // Late move reduction
                 let mut r = 0;
-                // 駒打ちの王手は数が多いので LMR の対象にする（枝刈りはしない）
-                if depth >= 3 && quiet && !in_check && (!gives_check || mv_is_drop(m)) && legal > 3 {
+                if depth >= 3 && quiet && !in_check && !gives_check && legal > 3 {
                     r = (0.75 + (depth as f64).ln() * (legal as f64).ln() / 2.25) as i32;
                     r = r.clamp(1, depth - 2);
                     if pv {
