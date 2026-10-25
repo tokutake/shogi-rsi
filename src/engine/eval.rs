@@ -144,10 +144,13 @@ pub fn evaluate(pos: &mut Position) -> i32 {
 
 // ---- 小さなニューラルネット（線形評価への残差項） ----
 // 入力: PST / KP_OWN / KP_OPP / 持ち駒（各手番視点の疎な特徴）→ 隠れ層 NN_H（クリップ ReLU）→ 出力。
+// 各視点の隠れ層には自分の駒の特徴（入力 0..NN_BASE）と相手の駒の特徴（NN_BASE..NN_IN）の両方が入る
+// （自分の攻め駒と相手の守り駒の組み合わせなどを非線形に評価できる）。
 // 隠れ層の値は do_move/undo_move で差分更新する（Position::nn）。重みは nn.bin（f32 リトルエンディアン）。
 pub const NN_H: usize = 32;
 pub const NN_HAND: usize = IDX_TEMPO - IDX_PST; // 持ち駒特徴の先頭
-pub const NN_IN: usize = NN_HAND + 8;
+pub const NN_BASE: usize = NN_HAND + 8;
+pub const NN_IN: usize = 2 * NN_BASE;
 
 /// 線形評価の特徴番号 → NN の入力番号
 #[inline(always)]
@@ -209,6 +212,7 @@ pub fn compute_nn(pos: &Position) -> [[f32; NN_H]; 2] {
     eval_terms(pos, |c, idx, k| {
         if let Some(i) = nn_index(idx) {
             nn_axpy(&mut acc[c], &n.w1[i], k as f32);
+            nn_axpy(&mut acc[c ^ 1], &n.w1[NN_BASE + i], k as f32);
         }
     });
     acc
@@ -221,13 +225,16 @@ pub fn nn_piece(acc: &mut [[f32; NN_H]; 2], sq: usize, p: u8, ksq: &[usize; 2], 
     piece_terms(sq, p, ksq, &mut |c, idx, k| {
         if let Some(i) = nn_index(idx) {
             nn_axpy(&mut acc[c], &n.w1[i], sign * k as f32);
+            nn_axpy(&mut acc[c ^ 1], &n.w1[NN_BASE + i], sign * k as f32);
         }
     });
 }
 
 #[inline]
-pub fn nn_hand(acc: &mut [f32; NN_H], pt: usize, delta: f32) {
-    nn_axpy(acc, &nn().w1[NN_HAND + pt], delta);
+pub fn nn_hand(acc: &mut [[f32; NN_H]; 2], c: Color, pt: usize, delta: f32) {
+    let n = nn();
+    nn_axpy(&mut acc[c], &n.w1[NN_HAND + pt], delta);
+    nn_axpy(&mut acc[c ^ 1], &n.w1[NN_BASE + NN_HAND + pt], delta);
 }
 
 #[inline]

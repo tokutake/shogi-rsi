@@ -2,6 +2,8 @@
 //!
 //!   shogi-rsi nntrain --labels labels.txt [--labels ...] --out src/engine/nn.bin [--epochs 40] [--init src/engine/nn.bin]
 //!
+//! --init には相手の駒の入力がない旧形式の重みも渡せる（相手側の重みを 0 として始める）。
+//!
 //! 教師は `label` が出力する `sfen|探索評価値|勝敗`。目標は手番側の勝率
 //! t = λ·結果 + (1-λ)·sigmoid(探索評価値·K)、予測は sigmoid(K·(線形評価 + NN 出力))。
 //! 線形評価は現行の params.rs を固定して使い、NN だけを学習する。
@@ -70,6 +72,7 @@ fn load(paths: &[String], lambda: f32, k: f32) -> (Samples, Samples) {
                 if let Some(i) = nn_index(idx) {
                     let side = if c == us { 0 } else { 1 };
                     f[side].push((i as u16, n as u16));
+                    f[side ^ 1].push(((NN_BASE + i) as u16, n as u16));
                 }
             });
             let lin_us = (lin[us] - lin[us ^ 1] + P[IDX_TEMPO]) as f32;
@@ -202,8 +205,15 @@ pub fn run_nntrain(args: &[String]) {
         Some(path) => {
             let b = std::fs::read(path).unwrap();
             let f: Vec<f32> = b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-            assert_eq!(f.len(), Net::len(), "init size mismatch");
-            Net::from_flat(&f)
+            if f.len() == NN_BASE * NN_H + 3 * NN_H {
+                // 相手の駒の入力がない旧形式: 相手側の重みを 0 で足す（出力は旧形式と同じ）
+                let mut w1 = f[..NN_BASE * NN_H].to_vec();
+                w1.resize(NN_IN * NN_H, 0.0);
+                Net { w1, b1: f[NN_BASE * NN_H..NN_BASE * NN_H + NN_H].to_vec(), v: f[NN_BASE * NN_H + NN_H..].to_vec() }
+            } else {
+                assert_eq!(f.len(), Net::len(), "init size mismatch");
+                Net::from_flat(&f)
+            }
         }
         None => Net {
             w1: (0..NN_IN * NN_H).map(|_| (rng.uniform() - 0.5) * 0.1).collect(),
