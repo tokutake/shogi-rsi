@@ -166,5 +166,13 @@
     "parent": "v20-ukon",
     "created": "2026-10-24T02:41:42Z",
     "description": "探索: PV 以外のノードでは駒打ちの王手を延長しない（盤上の駒による王手と PV は従来どおり延長）"
+  },
+  {
+    "number": 22,
+    "name": "yamato",
+    "commit": "a0e5c0470f984686e8d0b54affc973708aba93c1",
+    "parent": "v21-wakaba",
+    "created": "2026-10-25T07:16:04Z",
+    "description": "評価: NN の各視点の隠れ層に相手の駒の特徴も入力（重み0で追加）し、v21 生成の gensfen 深さ6・150万局面で v21 の重みから 4 epoch 追加学習"
   }
 ]

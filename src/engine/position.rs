@@ -592,11 +592,11 @@ impl Position {
                         let to = mv_to(m);
                         if mv_is_drop(m) {
                             super::eval::nn_piece(&mut acc, to, u.moved, &ksq, 1.0);
-                            super::eval::nn_hand(&mut acc[c], ptype(u.moved) as usize, -1.0);
+                            super::eval::nn_hand(&mut acc, c, ptype(u.moved) as usize, -1.0);
                         } else {
                             if u.captured != EMPTY {
                                 super::eval::nn_piece(&mut acc, to, u.captured, &ksq, -1.0);
-                                super::eval::nn_hand(&mut acc[c], unpromote(ptype(u.captured)) as usize, 1.0);
+                                super::eval::nn_hand(&mut acc, c, unpromote(ptype(u.captured)) as usize, 1.0);
                             }
                             let np = if mv_is_promo(m) { make_piece(c, promote(ptype(u.moved))) } else { u.moved };
                             super::eval::nn_piece(&mut acc, mv_from(m), u.moved, &ksq, -1.0);
