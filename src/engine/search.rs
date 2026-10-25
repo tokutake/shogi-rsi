@@ -389,8 +389,7 @@ impl Searcher {
                 continue;
             }
             legal += 1;
-            // 駒打ちの王手は数が多く大半は無駄なので、枝刈り・LMR の対象外にしない
-            let gives_check = !mv_is_drop(m) && pos.in_check();
+            let gives_check = pos.in_check();
             // Late move pruning: 浅い深さで後半の静かな手は読まない
             if !pv && !in_check && !gives_check && quiet && depth <= 3 && legal > (8 + 4 * depth * depth) / (2 - improving as i32)
                 && best_score > -MATE + 1000
@@ -411,7 +410,8 @@ impl Searcher {
             } else {
                 // Late move reduction
                 let mut r = 0;
-                if depth >= 3 && quiet && !in_check && !gives_check && legal > 3 {
+                // 駒打ちの王手は数が多いので LMR の対象にする（枝刈りはしない）
+                if depth >= 3 && quiet && !in_check && (!gives_check || mv_is_drop(m)) && legal > 3 {
                     r = (0.75 + (depth as f64).ln() * (legal as f64).ln() / 2.25) as i32;
                     r = r.clamp(1, depth - 2);
                     if pv {
