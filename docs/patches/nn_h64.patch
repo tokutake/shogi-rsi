@@ -1,0 +1,39 @@
+diff --git a/src/engine/eval.rs b/src/engine/eval.rs
+index 2bf253a..2c9b427 100644
+--- a/src/engine/eval.rs
++++ b/src/engine/eval.rs
+@@ -147,7 +147,7 @@ pub fn evaluate(pos: &mut Position) -> i32 {
+ // 各視点の隠れ層には自分の駒の特徴（入力 0..NN_BASE）と相手の駒の特徴（NN_BASE..NN_IN）の両方が入る
+ // （自分の攻め駒と相手の守り駒の組み合わせなどを非線形に評価できる）。
+ // 隠れ層の値は do_move/undo_move で差分更新する（Position::nn）。重みは nn.bin（f32 リトルエンディアン）。
+-pub const NN_H: usize = 32;
++pub const NN_H: usize = 64;
+ pub const NN_HAND: usize = IDX_TEMPO - IDX_PST; // 持ち駒特徴の先頭
+ pub const NN_BASE: usize = NN_HAND + 8;
+ pub const NN_IN: usize = 2 * NN_BASE;
+diff --git a/src/engine/nn_train.rs b/src/engine/nn_train.rs
+index d6309b0..cbdbe9a 100644
+--- a/src/engine/nn_train.rs
++++ b/src/engine/nn_train.rs
+@@ -210,6 +210,21 @@ pub fn run_nntrain(args: &[String]) {
+                 let mut w1 = f[..NN_BASE * NN_H].to_vec();
+                 w1.resize(NN_IN * NN_H, 0.0);
+                 Net { w1, b1: f[NN_BASE * NN_H..NN_BASE * NN_H + NN_H].to_vec(), v: f[NN_BASE * NN_H + NN_H..].to_vec() }
++            } else if f.len() != Net::len() && f.len() % (NN_IN + 3) == 0 && f.len() / (NN_IN + 3) < NN_H {
++                // 隠れ層が少ない旧形式: 追加するユニットの出力重みを 0 で足す（出力は旧形式と同じ）
++                let h = f.len() / (NN_IN + 3);
++                let mut net = Net { w1: vec![0.0; NN_IN * NN_H], b1: vec![0.5; NN_H], v: vec![0.0; 2 * NN_H] };
++                for i in 0..NN_IN {
++                    for j in 0..NN_H {
++                        net.w1[i * NN_H + j] = if j < h { f[i * h + j] } else { (rng.uniform() - 0.5) * 0.1 };
++                    }
++                }
++                net.b1[..h].copy_from_slice(&f[NN_IN * h..NN_IN * h + h]);
++                for side in 0..2 {
++                    let o = NN_IN * h + h + side * h;
++                    net.v[side * NN_H..side * NN_H + h].copy_from_slice(&f[o..o + h]);
++                }
++                net
+             } else {
+                 assert_eq!(f.len(), Net::len(), "init size mismatch");
+                 Net::from_flat(&f)
