@@ -147,7 +147,7 @@ pub fn evaluate(pos: &mut Position) -> i32 {
 // 各視点の隠れ層には自分の駒の特徴（入力 0..NN_BASE）と相手の駒の特徴（NN_BASE..NN_IN）の両方が入る
 // （自分の攻め駒と相手の守り駒の組み合わせなどを非線形に評価できる）。
 // 隠れ層の値は do_move/undo_move で差分更新する（Position::nn）。重みは nn.bin（f32 リトルエンディアン）。
-pub const NN_H: usize = 32;
+pub const NN_H: usize = 64;
 pub const NN_HAND: usize = IDX_TEMPO - IDX_PST; // 持ち駒特徴の先頭
 pub const NN_BASE: usize = NN_HAND + 8;
 pub const NN_IN: usize = 2 * NN_BASE;
