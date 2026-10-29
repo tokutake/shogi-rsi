@@ -210,21 +210,6 @@ pub fn run_nntrain(args: &[String]) {
                 let mut w1 = f[..NN_BASE * NN_H].to_vec();
                 w1.resize(NN_IN * NN_H, 0.0);
                 Net { w1, b1: f[NN_BASE * NN_H..NN_BASE * NN_H + NN_H].to_vec(), v: f[NN_BASE * NN_H + NN_H..].to_vec() }
-            } else if f.len() != Net::len() && f.len() % (NN_IN + 3) == 0 && f.len() / (NN_IN + 3) < NN_H {
-                // 隠れ層が少ない旧形式: 追加するユニットの出力重みを 0 で足す（出力は旧形式と同じ）
-                let h = f.len() / (NN_IN + 3);
-                let mut net = Net { w1: vec![0.0; NN_IN * NN_H], b1: vec![0.5; NN_H], v: vec![0.0; 2 * NN_H] };
-                for i in 0..NN_IN {
-                    for j in 0..NN_H {
-                        net.w1[i * NN_H + j] = if j < h { f[i * h + j] } else { (rng.uniform() - 0.5) * 0.1 };
-                    }
-                }
-                net.b1[..h].copy_from_slice(&f[NN_IN * h..NN_IN * h + h]);
-                for side in 0..2 {
-                    let o = NN_IN * h + h + side * h;
-                    net.v[side * NN_H..side * NN_H + h].copy_from_slice(&f[o..o + h]);
-                }
-                net
             } else {
                 assert_eq!(f.len(), Net::len(), "init size mismatch");
                 Net::from_flat(&f)
