@@ -52,14 +52,6 @@ impl TT {
             *e = TTEntry { key, mv, score, eval: eval.clamp(-32000, 32000) as i16, depth: depth as i8, flag };
         }
     }
-    /// 静止探索の結果は、空きか静止探索のエントリだけを置き換える
-    #[inline]
-    fn store_q(&mut self, key: u64, score: i32, eval: i32, flag: u8) {
-        let e = &mut self.table[(key as usize) & self.mask];
-        if e.flag == 0 || e.depth <= 0 {
-            *e = TTEntry { key, mv: NO_MOVE, score, eval: eval.clamp(-32000, 32000) as i16, depth: 0, flag };
-        }
-    }
 }
 
 pub struct Limits {
@@ -505,25 +497,10 @@ impl Searcher {
         }
         let really_in_check = pos.in_check();
         let in_check = qdepth < 4 && really_in_check;
-        let key = pos.key();
-        let mut tt_eval = -INF;
-        if let Some(e) = self.tt.probe(key) {
-            let s = score_from_tt(e.score, ply);
-            match e.flag {
-                1 => return s,
-                2 if s >= beta => return s,
-                3 if s <= alpha => return s,
-                _ => {}
-            }
-            tt_eval = e.eval as i32;
-        }
-        let orig_alpha = alpha;
         let mut best = -INF;
-        let mut stand = -INF;
         if !in_check {
-            stand = if tt_eval != -INF && !pos.eval_dirty() { tt_eval } else { evaluate(pos) };
+            let stand = evaluate(pos);
             if stand >= beta {
-                self.tt.store_q(key, score_to_tt(stand, ply), stand, 2);
                 return stand;
             }
             if stand > alpha {
@@ -574,8 +551,6 @@ impl Searcher {
         if in_check && legal == 0 {
             return -MATE + ply as i32;
         }
-        let flag = if best >= beta { 2 } else if best > orig_alpha { 1 } else { 3 };
-        self.tt.store_q(key, score_to_tt(best, ply), stand, flag);
         best
     }
 }
