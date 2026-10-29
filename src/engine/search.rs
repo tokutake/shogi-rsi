@@ -19,23 +19,17 @@ struct TTEntry {
     eval: i16,
     depth: i8,
     flag: u8, // 0 none, 1 exact, 2 lower, 3 upper
-    gen: u8,
 }
 
-/// 2 エントリのバケット。置き換えは古い探索（世代）の・浅いエントリを優先する
 pub struct TT {
     table: Vec<TTEntry>,
     mask: usize,
-    gen: u8,
 }
 
 impl TT {
     pub fn new(mb: usize) -> Self {
         let n = (mb * 1024 * 1024 / std::mem::size_of::<TTEntry>()).next_power_of_two() / 2;
-        TT { table: vec![TTEntry::default(); n.max(1024)], mask: n.max(1024) - 2, gen: 0 }
-    }
-    pub fn new_search(&mut self) {
-        self.gen = self.gen.wrapping_add(1);
+        TT { table: vec![TTEntry::default(); n.max(1024)], mask: n.max(1024) - 1 }
     }
     pub fn clear(&mut self) {
         for e in self.table.iter_mut() {
@@ -44,32 +38,19 @@ impl TT {
     }
     #[inline]
     fn probe(&self, key: u64) -> Option<TTEntry> {
-        let i = (key as usize) & self.mask;
-        for e in &self.table[i..i + 2] {
-            if e.flag != 0 && e.key == key {
-                return Some(*e);
-            }
+        let e = self.table[(key as usize) & self.mask];
+        if e.flag != 0 && e.key == key {
+            Some(e)
+        } else {
+            None
         }
-        None
     }
     #[inline]
     fn store(&mut self, key: u64, mv: Move, score: i32, eval: i32, depth: i32, flag: u8) {
-        let i = (key as usize) & self.mask;
-        let gen = self.gen;
-        let new = TTEntry { key, mv, score, eval: eval.clamp(-32000, 32000) as i16, depth: depth as i8, flag, gen };
-        let b = &mut self.table[i..i + 2];
-        for e in b.iter_mut() {
-            if e.flag != 0 && e.key == key {
-                if depth as i8 >= e.depth || flag == 1 || e.gen != gen {
-                    *e = new;
-                }
-                return;
-            }
+        let e = &mut self.table[(key as usize) & self.mask];
+        if e.key != key || depth as i8 >= e.depth || flag == 1 {
+            *e = TTEntry { key, mv, score, eval: eval.clamp(-32000, 32000) as i16, depth: depth as i8, flag };
         }
-        // 古い世代のエントリを優先し、同じ世代なら浅いほうを置き換える
-        let worth = |e: &TTEntry| if e.flag == 0 { -1000 } else { e.depth as i32 - if e.gen != gen { 100 } else { 0 } };
-        let v = if worth(&b[0]) <= worth(&b[1]) { 0 } else { 1 };
-        b[v] = new;
     }
 }
 
@@ -168,7 +149,6 @@ impl Searcher {
         self.time_ms = limits.time_ms;
         self.node_limit = limits.nodes;
         self.killers = [[NO_MOVE; 2]; MAX_PLY + 1];
-        self.tt.new_search();
         for h in self.history.iter_mut() {
             *h /= 8;
         }
