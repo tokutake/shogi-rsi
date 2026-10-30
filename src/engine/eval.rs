@@ -22,7 +22,9 @@ pub const IDX_PST: usize = 95; // [駒種 1..14][自陣から見た升 81]
 pub const IDX_KP_OWN: usize = IDX_PST + 15 * 81; // [駒種 1..14][自玉との相対 17x17]
 pub const IDX_KP_OPP: usize = IDX_KP_OWN + 15 * 289; // [駒種 1..14][敵玉との相対 17x17]
 pub const IDX_TEMPO: usize = IDX_KP_OPP + 15 * 289; // 手番ボーナス
-pub const NUM_PARAMS: usize = IDX_TEMPO + 1;
+pub const IDX_HANDK: usize = IDX_TEMPO + 1; // [駒種 0..7][k 0..18] 持ち駒が k 枚以上なら 1（枚数に対する非線形な価値）
+pub const HANDK_W: usize = 19;
+pub const NUM_PARAMS: usize = IDX_HANDK + 8 * HANDK_W;
 
 /// 指し手の並べ替え等で使う駒の価値
 pub const PIECE_VALUE: [i32; 15] = [
@@ -99,6 +101,9 @@ pub fn eval_terms<F: FnMut(Color, usize, i32)>(pos: &Position, mut f: F) {
             let n = pos.hand[c][pt] as i32;
             if n > 0 {
                 f(c, IDX_HAND + pt, n);
+                for k in 1..=n as usize {
+                    f(c, IDX_HANDK + pt * HANDK_W + k, 1);
+                }
             }
         }
     }
@@ -125,9 +130,10 @@ pub fn piece_score(sq: usize, p: u8, ksq: &[usize; 2]) -> i32 {
     s
 }
 
+/// 持ち駒 pt の n 枚目の評価
 #[inline]
-pub fn hand_score(pt: usize) -> i32 {
-    P[IDX_HAND + pt]
+pub fn hand_score(pt: usize, n: usize) -> i32 {
+    P[IDX_HAND + pt] + P[IDX_HANDK + pt * HANDK_W + n]
 }
 
 #[inline]
@@ -149,7 +155,8 @@ pub fn evaluate(pos: &mut Position) -> i32 {
 // 隠れ層の値は do_move/undo_move で差分更新する（Position::nn）。重みは nn.bin（f32 リトルエンディアン）。
 pub const NN_H: usize = 32;
 pub const NN_HAND: usize = IDX_TEMPO - IDX_PST; // 持ち駒特徴の先頭
-pub const NN_BASE: usize = NN_HAND + 8;
+pub const NN_HANDK: usize = NN_HAND + 8; // 持ち駒の枚数（k 枚以上）特徴の先頭
+pub const NN_BASE: usize = NN_HANDK + 8 * HANDK_W;
 pub const NN_IN: usize = 2 * NN_BASE;
 
 /// 線形評価の特徴番号 → NN の入力番号
@@ -159,6 +166,8 @@ pub fn nn_index(idx: usize) -> Option<usize> {
         Some(idx - IDX_PST)
     } else if idx >= IDX_HAND && idx < IDX_HAND + 8 {
         Some(NN_HAND + idx - IDX_HAND)
+    } else if idx >= IDX_HANDK && idx < NUM_PARAMS {
+        Some(NN_HANDK + idx - IDX_HANDK)
     } else {
         None
     }
@@ -230,11 +239,14 @@ pub fn nn_piece(acc: &mut [[f32; NN_H]; 2], sq: usize, p: u8, ksq: &[usize; 2], 
     });
 }
 
+/// 持ち駒 pt の k 枚目を加える（delta = +1）/ 除く（delta = -1）
 #[inline]
-pub fn nn_hand(acc: &mut [[f32; NN_H]; 2], c: Color, pt: usize, delta: f32) {
+pub fn nn_hand(acc: &mut [[f32; NN_H]; 2], c: Color, pt: usize, k: usize, delta: f32) {
     let n = nn();
     nn_axpy(&mut acc[c], &n.w1[NN_HAND + pt], delta);
     nn_axpy(&mut acc[c ^ 1], &n.w1[NN_BASE + NN_HAND + pt], delta);
+    nn_axpy(&mut acc[c], &n.w1[NN_HANDK + pt * HANDK_W + k], delta);
+    nn_axpy(&mut acc[c ^ 1], &n.w1[NN_BASE + NN_HANDK + pt * HANDK_W + k], delta);
 }
 
 #[inline]

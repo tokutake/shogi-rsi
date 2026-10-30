@@ -263,6 +263,7 @@ struct Undo {
     eval: [i32; 2],
     eval_dirty: bool,
     moved: u8, // 動かした（打った）駒（成る前）
+    hand_n: u8, // 打った・取った駒種の指す前の持ち駒の枚数
 }
 
 #[derive(Clone)]
@@ -504,9 +505,11 @@ impl Position {
         let prev_dirty = self.eval_dirty;
         let dirty = self.eval_dirty;
         let moved;
+        let mut hand_n = 0u8;
         if mv_is_drop(m) {
             let pt = mv_drop_pt(m);
             let n = self.hand[us][pt as usize] as usize;
+            hand_n = n as u8;
             self.hash ^= z.hand[us][pt as usize][n] ^ z.hand[us][pt as usize][n - 1];
             self.hand[us][pt as usize] -= 1;
             let p = make_piece(us, pt);
@@ -514,7 +517,7 @@ impl Position {
             self.board[to] = p;
             self.hash ^= z.board[p as usize][to];
             if !dirty {
-                self.eval[us] += super::eval::piece_score(to, p, &self.king_sq) - super::eval::hand_score(pt as usize);
+                self.eval[us] += super::eval::piece_score(to, p, &self.king_sq) - super::eval::hand_score(pt as usize, n);
             }
         } else {
             let from = mv_from(m);
@@ -524,11 +527,12 @@ impl Position {
             if captured != EMPTY {
                 self.hash ^= z.board[captured as usize][to];
                 let cpt = unpromote(ptype(captured)) as usize;
+                let n = self.hand[us][cpt] as usize;
+                hand_n = n as u8;
                 if !dirty {
                     self.eval[us ^ 1] -= super::eval::piece_score(to, captured, &self.king_sq);
-                    self.eval[us] += super::eval::hand_score(cpt);
+                    self.eval[us] += super::eval::hand_score(cpt, n + 1);
                 }
-                let n = self.hand[us][cpt] as usize;
                 self.hash ^= z.hand[us][cpt][n] ^ z.hand[us][cpt][n + 1];
                 self.hand[us][cpt] += 1;
             }
@@ -548,7 +552,7 @@ impl Position {
         self.hash ^= z.side;
         self.side ^= 1;
         self.ply += 1;
-        self.history.push(Undo { mv: m, captured, hash: prev_hash, eval: prev_eval, eval_dirty: prev_dirty, moved });
+        self.history.push(Undo { mv: m, captured, hash: prev_hash, eval: prev_eval, eval_dirty: prev_dirty, moved, hand_n });
         self.push_nn_slot();
     }
 
@@ -592,11 +596,11 @@ impl Position {
                         let to = mv_to(m);
                         if mv_is_drop(m) {
                             super::eval::nn_piece(&mut acc, to, u.moved, &ksq, 1.0);
-                            super::eval::nn_hand(&mut acc, c, ptype(u.moved) as usize, -1.0);
+                            super::eval::nn_hand(&mut acc, c, ptype(u.moved) as usize, u.hand_n as usize, -1.0);
                         } else {
                             if u.captured != EMPTY {
                                 super::eval::nn_piece(&mut acc, to, u.captured, &ksq, -1.0);
-                                super::eval::nn_hand(&mut acc, c, unpromote(ptype(u.captured)) as usize, 1.0);
+                                super::eval::nn_hand(&mut acc, c, unpromote(ptype(u.captured)) as usize, u.hand_n as usize + 1, 1.0);
                             }
                             let np = if mv_is_promo(m) { make_piece(c, promote(ptype(u.moved))) } else { u.moved };
                             super::eval::nn_piece(&mut acc, mv_from(m), u.moved, &ksq, -1.0);
@@ -662,7 +666,7 @@ impl Position {
         self.hash ^= zobrist().side;
         self.side ^= 1;
         self.ply += 1;
-        self.history.push(Undo { mv: NO_MOVE, captured: EMPTY, hash: prev, eval: self.eval, eval_dirty: self.eval_dirty, moved: EMPTY });
+        self.history.push(Undo { mv: NO_MOVE, captured: EMPTY, hash: prev, eval: self.eval, eval_dirty: self.eval_dirty, moved: EMPTY, hand_n: 0 });
         self.push_nn_slot();
     }
 
