@@ -771,6 +771,146 @@ impl Position {
         self.is_attacked(self.king_sq[self.side], self.side ^ 1)
     }
 
+    // ---- 1手詰め ----
+    /// 手番側に 1 手詰めがあるか。調べるのは敵玉に接する升への駒を取らない移動・駒打ち（歩打ちを除く）と
+    /// 桂打ちの王手だけ（駒を取る王手は静止探索が読む）。逃げ道や王手駒を取る手は保守的に判定するので、
+    /// 見逃しはあるが誤検出はしない。手番側が王手されていない局面で呼ぶこと。
+    pub fn mate1(&mut self) -> bool {
+        let t = tables();
+        let us = self.side;
+        let ksq = self.king_sq[us ^ 1];
+        let hand = self.hand[us];
+        for d in 0..8 {
+            if t.ray_len[ksq][d] == 0 {
+                continue;
+            }
+            let to = t.ray[ksq][d][0] as usize;
+            if self.board[to] != EMPTY {
+                continue;
+            }
+            let bit = 1u8 << (7 - d); // to から玉への方向
+            let tr = (to / 9) as i32;
+            for pt in [ROOK, BISHOP, GOLD, SILVER, LANCE] {
+                if hand[pt as usize] > 0
+                    && (t.step_mask[us][pt as usize] | t.slide_mask[us][pt as usize]) & bit != 0
+                    && self.mate_with(to, make_piece(us, pt), None)
+                {
+                    return true;
+                }
+            }
+            // to に利いている自駒（玉以外）を動かす
+            for d2 in 0..8 {
+                let od = 7 - d2; // 攻め駒から to への方向
+                let len = t.ray_len[to][d2] as usize;
+                for i in 0..len {
+                    let from = t.ray[to][d2][i] as usize;
+                    let p = self.board[from];
+                    if p == EMPTY {
+                        continue;
+                    }
+                    if color_of(p) == us && ptype(p) != KING {
+                        let pt = ptype(p);
+                        let m = if i == 0 { t.step_mask[us][pt as usize] | t.slide_mask[us][pt as usize] } else { t.slide_mask[us][pt as usize] };
+                        if m & (1 << od) != 0 && self.mate_by_move(from, to, p, bit) {
+                            return true;
+                        }
+                    }
+                    break;
+                }
+            }
+            // 桂馬で to へ跳ぶ
+            let sr = if us == BLACK { tr + 2 } else { tr - 2 };
+            if (0..9).contains(&sr) {
+                let tc = (to % 9) as i32;
+                let kn = make_piece(us, KNIGHT);
+                for sc in [tc - 1, tc + 1] {
+                    if (0..9).contains(&sc) {
+                        let from = (sr * 9 + sc) as usize;
+                        if self.board[from] == kn && self.mate_by_move(from, to, kn, bit) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        // 桂打ち
+        if hand[KNIGHT as usize] > 0 {
+            let (kr, kc) = ((ksq / 9) as i32, (ksq % 9) as i32);
+            let r = if us == BLACK { kr + 2 } else { kr - 2 };
+            if (0..9).contains(&r) {
+                for c in [kc - 1, kc + 1] {
+                    if (0..9).contains(&c) {
+                        let to = (r * 9 + c) as usize;
+                        if self.board[to] == EMPTY && self.mate_with(to, make_piece(us, KNIGHT), None) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// 盤上の駒 p を from から to（敵玉に接する空き升）へ動かして詰むか（成り・不成の両方）
+    fn mate_by_move(&mut self, from: usize, to: usize, p: u8, bit: u8) -> bool {
+        let t = tables();
+        let us = self.side;
+        let pt = ptype(p);
+        let tr = (to / 9) as i32;
+        let gives = |q: u8| (t.step_mask[us][q as usize] | t.slide_mask[us][q as usize]) & bit != 0;
+        if can_promote_type(pt) && (Self::in_promo_zone(us, (from / 9) as i32) || Self::in_promo_zone(us, tr)) {
+            let pp = make_piece(us, promote(pt));
+            if gives(promote(pt)) && self.mate_with(to, pp, Some(from)) {
+                return true;
+            }
+        }
+        !Self::dead_end(us, pt, tr) && gives(pt) && self.mate_with(to, p, Some(from))
+    }
+
+    /// 駒 np を to に置いて（from があればそこから動かして）王手したとき詰むか。np は敵玉に王手していること。
+    fn mate_with(&mut self, to: usize, np: u8, from: Option<usize>) -> bool {
+        let t = tables();
+        let us = self.side;
+        let them = us ^ 1;
+        let ksq = self.king_sq[them];
+        let moved = from.map(|f| self.board[f]);
+        if let Some(f) = from {
+            self.board[f] = EMPTY;
+        }
+        self.board[to] = np;
+        // 自玉が素抜かれる手は指せない
+        let mut mate = from.is_none() || !self.is_attacked(self.king_sq[us], them);
+        if mate {
+            let king = self.board[ksq];
+            self.board[ksq] = EMPTY;
+            // 玉の逃げ道（王手駒を玉で取る手を含む）
+            for d in 0..8 {
+                if t.ray_len[ksq][d] == 0 {
+                    continue;
+                }
+                let e = t.ray[ksq][d][0] as usize;
+                let q = self.board[e];
+                if q != EMPTY && color_of(q) == them {
+                    continue;
+                }
+                if !self.is_attacked(e, us) {
+                    mate = false;
+                    break;
+                }
+            }
+            // 玉以外の駒で王手駒を取る手（pin は考えず、利きがあれば取れるとみなす）
+            if mate && self.is_attacked(to, them) {
+                mate = false;
+            }
+            self.board[ksq] = king;
+        }
+        self.board[to] = EMPTY;
+        if let (Some(f), Some(p)) = (from, moved) {
+            self.board[f] = p;
+        }
+        mate
+    }
+
     // ---- 指し手生成 ----
     #[inline]
     fn in_promo_zone(c: Color, r: i32) -> bool {
@@ -984,3 +1124,66 @@ impl Position {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 全合法手を指して詰みを調べる素朴な 1 手詰め判定（打ち歩詰めは is_legal が除く）
+    fn brute_mate1(pos: &mut Position) -> bool {
+        for m in pos.legal_moves() {
+            pos.do_move(m);
+            let mate = pos.in_check() && !pos.has_legal_move();
+            pos.undo_move();
+            if mate {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn mate1_no_false_positive() {
+        // ランダムな対局の各局面で、mate1 が詰みと言えば必ず詰みであることを確かめる
+        let mut rng = 0x9E3779B97F4A7C15u64;
+        let (mut found, mut total) = (0, 0);
+        for _ in 0..300 {
+            let mut pos = Position::startpos();
+            for _ in 0..200 {
+                let moves = pos.legal_moves();
+                if moves.is_empty() {
+                    break;
+                }
+                if !pos.in_check() {
+                    let fast = pos.mate1();
+                    let sfen = pos.to_sfen();
+                    if fast {
+                        assert!(brute_mate1(&mut pos), "false mate: {}", sfen);
+                        found += 1;
+                    }
+                    if brute_mate1(&mut pos) {
+                        total += 1;
+                    }
+                    assert_eq!(pos.to_sfen(), sfen);
+                }
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                let m = moves[(rng % moves.len() as u64) as usize];
+                pos.do_move(m);
+            }
+        }
+        eprintln!("mate1 found {} / {}", found, total);
+        assert!(found * 2 > total);
+    }
+
+    #[test]
+    fn mate1_basic() {
+        // 頭金
+        let mut pos = Position::from_sfen("4k4/9/4P4/9/9/9/9/9/4K4 b G 1").unwrap();
+        assert!(pos.mate1());
+        // 金がなければ詰まない
+        let mut pos = Position::from_sfen("4k4/9/4P4/9/9/9/9/9/4K4 b S 1").unwrap();
+        assert!(!pos.mate1());
+    }
+}

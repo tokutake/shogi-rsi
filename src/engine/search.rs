@@ -503,6 +503,10 @@ impl Searcher {
             if stand >= beta {
                 return stand;
             }
+            // 末端で 1 手詰めを見逃さない（駒を取らない王手は静止探索で読まないため）
+            if qdepth == 0 && pos.mate1() {
+                return MATE - ply as i32 - 1;
+            }
             if stand > alpha {
                 alpha = stand;
             }
