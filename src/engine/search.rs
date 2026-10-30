@@ -344,6 +344,11 @@ impl Searcher {
             depth -= 1;
         }
 
+        // 1 手詰めがあれば読まずに返す
+        if !in_check && ply > 0 && pos.mate1() {
+            return MATE - ply as i32 - 1;
+        }
+
         // 静的評価は置換表に保存しておき、再訪時は評価関数を呼ばない（玉移動後は子が全計算を繰り返さないよう評価する）
         let static_eval = if in_check { -INF } else if tt_eval != -INF && !pos.eval_dirty() { tt_eval } else { evaluate(pos) };
         self.evals[ply] = static_eval;
