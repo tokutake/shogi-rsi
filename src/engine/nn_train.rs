@@ -47,7 +47,8 @@ fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
-/// 10 局面に 1 つを検証用に回し、(学習, 検証) を返す
+/// 連続する 1000 局面ごとのブロックの 10 個に 1 つを検証用に回し、(学習, 検証) を返す。
+/// gensfen は 1 局の局面を続けて書くので、局面単位で分けると同じ対局の局面が学習側にも入り過学習を検出できない
 fn load(paths: &[String], lambda: f32, k: f32) -> (Samples, Samples) {
     let (mut train, mut valid) = (Samples::new(), Samples::new());
     let mut n = 0usize;
@@ -76,7 +77,7 @@ fn load(paths: &[String], lambda: f32, k: f32) -> (Samples, Samples) {
                 }
             });
             let lin_us = (lin[us] - lin[us ^ 1] + P[IDX_TEMPO]) as f32;
-            if n % 10 == 0 { &mut valid } else { &mut train }.push(&f, lin_us, target);
+            if n / 1000 % 10 == 0 { &mut valid } else { &mut train }.push(&f, lin_us, target);
             n += 1;
         }
     }
