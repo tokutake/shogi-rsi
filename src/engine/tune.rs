@@ -253,6 +253,8 @@ fn write_params(path: &str, params: &[f64]) {
         ("KP_OPP [駒種0..14][敵玉との相対17x17]", 95 + 15 * 81 + 15 * 289, 15 * 289),
         ("TEMPO (手番ボーナス)", 95 + 15 * 81 + 30 * 289, 1),
         ("HAND_COUNT [駒種0..7][k 枚以上 0..18]", super::eval::IDX_HANDK, 8 * super::eval::HANDK_W),
+        ("KBP_OWN [自玉の区画9][駒種0..14][升81]", super::eval::IDX_KBP_OWN, super::eval::KBP_N),
+        ("KBP_OPP [敵玉の区画9][駒種0..14][升81]", super::eval::IDX_KBP_OPP, super::eval::KBP_N),
     ];
     let mut s = format!(
         "//! 評価関数のパラメータ。`shogi-rsi tune` で自動生成・上書きされる。\n//! レイアウトは eval.rs の IDX_* を参照。\n\npub const P: [i32; {}] = [\n",
