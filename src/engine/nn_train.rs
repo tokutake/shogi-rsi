@@ -2,7 +2,7 @@
 //!
 //!   shogi-rsi nntrain --labels labels.txt [--labels ...] --out src/engine/nn.bin [--epochs 40] [--init src/engine/nn.bin]
 //!
-//! --init には持ち駒の枚数特徴がない旧形式（v25 以前）や玉の区画特徴がない旧形式（v26 以前）の重みも渡せる（その重みを 0 として始める）。
+//! --init には持ち駒の枚数特徴がない旧形式（v25 以前）の重みも渡せる（その重みを 0 として始める）。
 //!
 //! 教師は `label` が出力する `sfen|探索評価値|勝敗`。目標は手番側の勝率
 //! t = λ·結果 + (1-λ)·sigmoid(探索評価値·K)、予測は sigmoid(K·(線形評価 + NN 出力))。
@@ -206,8 +206,9 @@ pub fn run_nntrain(args: &[String]) {
         Some(path) => {
             let b = std::fs::read(path).unwrap();
             let f: Vec<f32> = b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-            // 旧形式（持ち駒の枚数特徴がない v25 以前 / 玉の区画特徴がない v26 以前）: 各視点の末尾に 0 の行を足す（出力は旧形式と同じ）
-            if let Some(&old_base) = [NN_HANDK, NN_KBP].iter().find(|&&b| f.len() == 2 * b * NN_H + 3 * NN_H) {
+            let old_base = NN_HANDK; // 持ち駒の枚数特徴がない旧形式の 1 視点あたりの入力数
+            if f.len() == 2 * old_base * NN_H + 3 * NN_H {
+                // 持ち駒の枚数特徴がない旧形式: 各視点の末尾に 0 の行を足す（出力は旧形式と同じ）
                 let mut w1 = vec![0.0; NN_IN * NN_H];
                 w1[..old_base * NN_H].copy_from_slice(&f[..old_base * NN_H]);
                 w1[NN_BASE * NN_H..(NN_BASE + old_base) * NN_H].copy_from_slice(&f[old_base * NN_H..2 * old_base * NN_H]);

@@ -24,10 +24,7 @@ pub const IDX_KP_OPP: usize = IDX_KP_OWN + 15 * 289; // [駒種 1..14][敵玉と
 pub const IDX_TEMPO: usize = IDX_KP_OPP + 15 * 289; // 手番ボーナス
 pub const IDX_HANDK: usize = IDX_TEMPO + 1; // [駒種 0..7][k 0..18] 持ち駒が k 枚以上なら 1（枚数に対する非線形な価値）
 pub const HANDK_W: usize = 19;
-pub const IDX_KBP_OWN: usize = IDX_HANDK + 8 * HANDK_W; // [自玉の区画 9][駒種 0..14][自陣から見た升 81]
-pub const IDX_KBP_OPP: usize = IDX_KBP_OWN + KBP_N; // [敵玉の区画 9][駒種 0..14][自陣から見た升 81]
-pub const KBP_N: usize = 9 * 15 * 81;
-pub const NUM_PARAMS: usize = IDX_KBP_OPP + KBP_N;
+pub const NUM_PARAMS: usize = IDX_HANDK + 8 * HANDK_W;
 
 /// 指し手の並べ替え等で使う駒の価値
 pub const PIECE_VALUE: [i32; 15] = [
@@ -56,14 +53,6 @@ pub fn piece_terms<F: FnMut(Color, usize, i32)>(sq: usize, p: u8, ksq: &[usize; 
         return;
     }
     f(c, IDX_PIECE + pt as usize, 1);
-    // 玉の区画（筋 3 区画 x 段 3 区画）ごとの駒の絶対位置。囲いの形・玉の位置に応じた駒配置を表す
-    {
-        let (ok, ek) = if c == BLACK { (ksq[c], ksq[c ^ 1]) } else { (80 - ksq[c], 80 - ksq[c ^ 1]) };
-        let ob = (8 - ok / 9).min(2) * 3 + ok % 9 / 3;
-        let eb = (ek / 9).min(2) * 3 + ek % 9 / 3;
-        f(c, IDX_KBP_OWN + (ob * 15 + pt as usize) * 81 + rsq, 1);
-        f(c, IDX_KBP_OPP + (eb * 15 + pt as usize) * 81 + rsq, 1);
-    }
     {
         let (mut dr, mut dc) = ((sq / 9) as i32 - (ksq[c] / 9) as i32, (sq % 9) as i32 - (ksq[c] % 9) as i32);
         let (mut er, mut ec) = ((sq / 9) as i32 - (ksq[c ^ 1] / 9) as i32, (sq % 9) as i32 - (ksq[c ^ 1] % 9) as i32);
@@ -167,10 +156,8 @@ pub fn evaluate(pos: &mut Position) -> i32 {
 pub const NN_H: usize = 32;
 pub const NN_HAND: usize = IDX_TEMPO - IDX_PST; // 持ち駒特徴の先頭
 pub const NN_HANDK: usize = NN_HAND + 8; // 持ち駒の枚数（k 枚以上）特徴の先頭
-pub const NN_KBP: usize = NN_HANDK + 8 * HANDK_W; // 玉の区画ごとの駒配置特徴の先頭
-pub const NN_BASE: usize = NN_KBP + 2 * KBP_N;
+pub const NN_BASE: usize = NN_HANDK + 8 * HANDK_W;
 pub const NN_IN: usize = 2 * NN_BASE;
-const _: () = assert!(NN_IN <= 65536); // nntrain は特徴番号を u16 で持つ
 
 /// 線形評価の特徴番号 → NN の入力番号
 #[inline(always)]
@@ -179,10 +166,8 @@ pub fn nn_index(idx: usize) -> Option<usize> {
         Some(idx - IDX_PST)
     } else if idx >= IDX_HAND && idx < IDX_HAND + 8 {
         Some(NN_HAND + idx - IDX_HAND)
-    } else if idx >= IDX_HANDK && idx < IDX_KBP_OWN {
+    } else if idx >= IDX_HANDK && idx < NUM_PARAMS {
         Some(NN_HANDK + idx - IDX_HANDK)
-    } else if idx >= IDX_KBP_OWN && idx < NUM_PARAMS {
-        Some(NN_KBP + idx - IDX_KBP_OWN)
     } else {
         None
     }
