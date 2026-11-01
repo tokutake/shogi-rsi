@@ -323,9 +323,11 @@ impl Searcher {
         let key = pos.key();
         let mut tt_move = NO_MOVE;
         let mut tt_eval = -INF;
+        let mut tt_bound: Option<(i32, u8)> = None;
         if let Some(e) = self.tt.probe(key) {
             tt_move = e.mv;
             tt_eval = e.eval as i32;
+            tt_bound = Some((score_from_tt(e.score, ply), e.flag));
             if !pv && ply > 0 && e.depth as i32 >= depth {
                 let s = score_from_tt(e.score, ply);
                 match e.flag {
@@ -345,9 +347,18 @@ impl Searcher {
         }
 
         // 静的評価は置換表に保存しておき、再訪時は評価関数を呼ばない（玉移動後は子が全計算を繰り返さないよう評価する）
-        let static_eval = if in_check { -INF } else if tt_eval != -INF && !pos.eval_dirty() { tt_eval } else { evaluate(pos) };
-        self.evals[ply] = static_eval;
-        let improving = !in_check && ply >= 2 && self.evals[ply - 2] != -INF && static_eval > self.evals[ply - 2];
+        let raw_eval = if in_check { -INF } else if tt_eval != -INF && !pos.eval_dirty() { tt_eval } else { evaluate(pos) };
+        self.evals[ply] = raw_eval;
+        // 枝刈り用の評価: 置換表の探索値が静的評価より正確な側の境界なら、そちらを使う
+        let mut static_eval = raw_eval;
+        if !in_check {
+            if let Some((s, f)) = tt_bound {
+                if s.abs() < MATE - 1000 && (f == 1 || (f == 2 && s > static_eval) || (f == 3 && s < static_eval)) {
+                    static_eval = s;
+                }
+            }
+        }
+        let improving = !in_check && ply >= 2 && self.evals[ply - 2] != -INF && raw_eval > self.evals[ply - 2];
 
         // Reverse futility pruning（静的評価が beta を大きく上回るなら打ち切り）
         if !pv && !in_check && depth <= 3 && ply > 0 && beta.abs() < MATE - 1000 && static_eval - 150 * depth >= beta {
@@ -482,7 +493,7 @@ impl Searcher {
         } else {
             3
         };
-        self.tt.store(key, best_move, score_to_tt(best_score, ply), static_eval, depth, flag);
+        self.tt.store(key, best_move, score_to_tt(best_score, ply), raw_eval, depth, flag);
         best_score
     }
 
