@@ -6,6 +6,7 @@
 
 use super::params::P;
 use super::position::*;
+use std::mem::MaybeUninit;
 use std::sync::OnceLock;
 
 pub const IDX_PIECE: usize = 0;
@@ -110,9 +111,115 @@ pub fn eval_terms<F: FnMut(Color, usize, i32)>(pos: &Position, mut f: F) {
     f(pos.side, IDX_TEMPO, 1);
 }
 
+/// 線形評価の駒 1 枚分を 3 回の表引きで求めるための合成表（piece_terms の和と同一）
+struct LinTables {
+    /// [駒(色込み)][升]: PST + 駒割り（玉は PST + 玉の段）
+    pst: [[i32; 81]; 32],
+    /// [駒種][自玉との相対 17x17]: KP_OWN + 自玉との距離の項
+    own: [[i32; 289]; 15],
+    /// [駒種][敵玉との相対 17x17]: KP_OPP + 敵玉との距離の項
+    opp: [[i32; 289]; 15],
+    /// [升][玉の升] → 先手視点の相対位置の番号（後手は 288 - これ）
+    rel: [[u16; 81]; 81],
+}
+
+fn lin_tables() -> &'static LinTables {
+    static T: OnceLock<LinTables> = OnceLock::new();
+    T.get_or_init(|| {
+        // const の P を直接添字で引くと毎回スタックへ複製されるので、static への参照で引く
+        static PS: [i32; NUM_PARAMS] = P;
+        let pp = &PS;
+        let mut t = LinTables { pst: [[0; 81]; 32], own: [[0; 289]; 15], opp: [[0; 289]; 15], rel: [[0; 81]; 81] };
+        for sq in 0..81 {
+            for k in 0..81 {
+                let dr = (sq / 9) as i32 - (k / 9) as i32;
+                let dc = (sq % 9) as i32 - (k % 9) as i32;
+                t.rel[sq][k] = ((dr + 8) * 17 + dc + 8) as u16;
+            }
+        }
+        for c in 0..2 {
+            for pt in 1..15u8 {
+                let p = make_piece(c, pt);
+                for sq in 0..81 {
+                    let rsq = if c == BLACK { sq } else { 80 - sq };
+                    let mut v = pp[IDX_PST + pt as usize * 81 + rsq];
+                    if pt == KING {
+                        let r = sq / 9;
+                        v += pp[IDX_KING_RANK + if c == BLACK { 8 - r } else { r }];
+                    } else {
+                        v += pp[IDX_PIECE + pt as usize];
+                    }
+                    t.pst[p as usize][sq] = v;
+                }
+            }
+        }
+        for pt in 1..15u8 {
+            if pt == KING {
+                continue;
+            }
+            for rel in 0..289 {
+                let d = ((rel / 17) as i32 - 8).abs().max(((rel % 17) as i32 - 8).abs()) as usize;
+                let (def, atk) = match pt {
+                    GOLD | PPAWN | PLANCE | PKNIGHT | PSILVER => (pp[IDX_DEF_GOLD + d], pp[IDX_ATK_MINOR + d]),
+                    SILVER => (pp[IDX_DEF_SILVER + d], pp[IDX_ATK_MINOR + d]),
+                    KNIGHT | LANCE => (0, pp[IDX_ATK_KL + d]),
+                    HORSE => (pp[IDX_DEF_HORSE + d], pp[IDX_ATK_MAJOR + d]),
+                    BISHOP | ROOK | DRAGON => (0, pp[IDX_ATK_MAJOR + d]),
+                    PAWN => (0, pp[IDX_ATK_PAWN + d]),
+                    _ => (0, 0),
+                };
+                t.own[pt as usize][rel] = pp[IDX_KP_OWN + pt as usize * 289 + rel] + def;
+                t.opp[pt as usize][rel] = pp[IDX_KP_OPP + pt as usize * 289 + rel] + atk;
+            }
+        }
+        t
+    })
+}
+
 /// 盤面全体から各手番の評価合計を計算する（Position が差分更新の初期値に使う）
 /// 手番ボーナスを含まない各色の評価合計
 pub fn compute_scores(pos: &Position) -> [i32; 2] {
+    let mut score = [0i32; 2];
+    for sq in 0..81 {
+        let p = pos.board[sq];
+        if p != EMPTY {
+            score[color_of(p)] += piece_score(sq, p, &pos.king_sq);
+        }
+    }
+    for c in 0..2 {
+        for pt in 1..8 {
+            for k in 1..=pos.hand[c][pt] as usize {
+                score[c] += hand_score(pt, k);
+            }
+        }
+    }
+    score
+}
+
+/// 駒 1 枚分の評価（その駒の色の側に加算される値）。piece_terms の和と同じ
+#[inline]
+pub fn piece_score(sq: usize, p: u8, ksq: &[usize; 2]) -> i32 {
+    let t = lin_tables();
+    let v = t.pst[p as usize][sq];
+    let pt = ptype(p) as usize;
+    if pt == KING as usize {
+        return v;
+    }
+    let c = color_of(p);
+    let (ro, re) = (t.rel[sq][ksq[c]] as usize, t.rel[sq][ksq[c ^ 1]] as usize);
+    let (ro, re) = if c == BLACK { (ro, re) } else { (288 - ro, 288 - re) };
+    v + t.own[pt][ro] + t.opp[pt][re]
+}
+
+/// piece_terms から求める版（検証用）
+pub fn piece_score_slow(sq: usize, p: u8, ksq: &[usize; 2]) -> i32 {
+    let mut s = 0;
+    piece_terms(sq, p, ksq, &mut |_, idx, n| s += P[idx] * n);
+    s
+}
+
+/// eval_terms から求める版（検証用）
+pub fn compute_scores_slow(pos: &Position) -> [i32; 2] {
     let mut score = [0i32; 2];
     eval_terms(pos, |c, idx, n| {
         if idx != IDX_TEMPO {
@@ -120,14 +227,6 @@ pub fn compute_scores(pos: &Position) -> [i32; 2] {
         }
     });
     score
-}
-
-/// 駒 1 枚分の評価（その駒の色の側に加算される値）
-#[inline]
-pub fn piece_score(sq: usize, p: u8, ksq: &[usize; 2]) -> i32 {
-    let mut s = 0;
-    piece_terms(sq, p, ksq, &mut |_, idx, n| s += P[idx] * n);
-    s
 }
 
 /// 持ち駒 pt の n 枚目の評価
@@ -211,6 +310,63 @@ pub fn nn_axpy(acc: &mut [f32; NN_H], row: &[f32; NN_H], k: f32) {
     }
 }
 
+/// 隠れ層への加算（w1 の行番号と係数）を集めて、各視点の隠れ層ごとに 1 回の走査でまとめて足す。
+/// 各要素への加算順は 1 行ずつ足すのと同じなので結果も同一。
+pub struct NnDelta<const N: usize> {
+    rows: [[MaybeUninit<(u32, f32)>; N]; 2], // 先頭 n[c] 個だけ初期化済み
+    n: [usize; 2],
+}
+
+impl<const N: usize> NnDelta<N> {
+    #[inline(always)]
+    pub fn new() -> Self {
+        // MaybeUninit の配列は初期化不要（ゼロ埋めの memset を避ける）
+        NnDelta { rows: [[const { MaybeUninit::uninit() }; N]; 2], n: [0, 0] }
+    }
+    #[inline(always)]
+    fn push(&mut self, c: Color, row: usize, k: f32) {
+        self.rows[c][self.n[c]] = MaybeUninit::new((row as u32, k));
+        self.n[c] += 1;
+    }
+    /// 線形評価の特徴 (c, idx, k) を NN の両視点に加える
+    #[inline(always)]
+    fn term(&mut self, c: Color, idx: usize, k: f32) {
+        if let Some(i) = nn_index(idx) {
+            self.push(c, i, k);
+            self.push(c ^ 1, NN_BASE + i, k);
+        }
+    }
+    /// 盤上の駒 1 枚の寄与を加減算する（sign = +1 / -1）
+    #[inline(always)]
+    pub fn piece(&mut self, sq: usize, p: u8, ksq: &[usize; 2], sign: f32) {
+        piece_terms(sq, p, ksq, &mut |c, idx, k| self.term(c, idx, sign * k as f32));
+    }
+    /// 持ち駒 pt の k 枚目を加える（delta = +1）/ 除く（delta = -1）
+    #[inline(always)]
+    pub fn hand(&mut self, c: Color, pt: usize, k: usize, delta: f32) {
+        self.push(c, NN_HAND + pt, delta);
+        self.push(c ^ 1, NN_BASE + NN_HAND + pt, delta);
+        self.push(c, NN_HANDK + pt * HANDK_W + k, delta);
+        self.push(c ^ 1, NN_BASE + NN_HANDK + pt * HANDK_W + k, delta);
+    }
+    #[inline(always)]
+    pub fn apply(&self, acc: &mut [[f32; NN_H]; 2]) {
+        let w1 = &nn().w1;
+        for c in 0..2 {
+            let mut a = acc[c];
+            for e in &self.rows[c][..self.n[c]] {
+                // SAFETY: 先頭 n[c] 個は push で初期化済み
+                let (r, k) = unsafe { e.assume_init() };
+                let row = &w1[r as usize];
+                for i in 0..NN_H {
+                    a[i] += row[i] * k;
+                }
+            }
+            acc[c] = a;
+        }
+    }
+}
+
 /// 盤面全体から両色の隠れ層（活性化前）を計算する
 pub fn compute_nn(pos: &Position) -> [[f32; NN_H]; 2] {
     let n = nn();
@@ -218,35 +374,10 @@ pub fn compute_nn(pos: &Position) -> [[f32; NN_H]; 2] {
     if !n.enabled {
         return acc;
     }
-    eval_terms(pos, |c, idx, k| {
-        if let Some(i) = nn_index(idx) {
-            nn_axpy(&mut acc[c], &n.w1[i], k as f32);
-            nn_axpy(&mut acc[c ^ 1], &n.w1[NN_BASE + i], k as f32);
-        }
-    });
+    let mut d = NnDelta::<320>::new();
+    eval_terms(pos, |c, idx, k| d.term(c, idx, k as f32));
+    d.apply(&mut acc);
     acc
-}
-
-/// 盤上の駒 1 枚の NN 寄与を加減算する（sign = +1 / -1）
-#[inline]
-pub fn nn_piece(acc: &mut [[f32; NN_H]; 2], sq: usize, p: u8, ksq: &[usize; 2], sign: f32) {
-    let n = nn();
-    piece_terms(sq, p, ksq, &mut |c, idx, k| {
-        if let Some(i) = nn_index(idx) {
-            nn_axpy(&mut acc[c], &n.w1[i], sign * k as f32);
-            nn_axpy(&mut acc[c ^ 1], &n.w1[NN_BASE + i], sign * k as f32);
-        }
-    });
-}
-
-/// 持ち駒 pt の k 枚目を加える（delta = +1）/ 除く（delta = -1）
-#[inline]
-pub fn nn_hand(acc: &mut [[f32; NN_H]; 2], c: Color, pt: usize, k: usize, delta: f32) {
-    let n = nn();
-    nn_axpy(&mut acc[c], &n.w1[NN_HAND + pt], delta);
-    nn_axpy(&mut acc[c ^ 1], &n.w1[NN_BASE + NN_HAND + pt], delta);
-    nn_axpy(&mut acc[c], &n.w1[NN_HANDK + pt * HANDK_W + k], delta);
-    nn_axpy(&mut acc[c ^ 1], &n.w1[NN_BASE + NN_HANDK + pt * HANDK_W + k], delta);
 }
 
 #[inline]
@@ -257,4 +388,28 @@ pub fn nn_output(acc: &[[f32; NN_H]; 2], us: usize) -> f32 {
         s += n.v[0][i] * acc[us][i].clamp(0.0, 1.0) + n.v[1][i] * acc[us ^ 1][i].clamp(0.0, 1.0);
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fast_linear_matches_terms() {
+        for c in 0..2 {
+            for pt in 1..15u8 {
+                let p = make_piece(c, pt);
+                for sq in 0..81 {
+                    for k0 in (0..81).step_by(7) {
+                        for k1 in (0..81).step_by(5) {
+                            let ksq = [k0, k1];
+                            assert_eq!(piece_score(sq, p, &ksq), piece_score_slow(sq, p, &ksq));
+                        }
+                    }
+                }
+            }
+        }
+        let pos = Position::from_sfen("l6nl/5+P1gk/2np1S3/p1p4Pp/3P2Sp1/1PPb2P1P/P5GS1/R8/LN4bKL w RGgsn5p 1").unwrap();
+        assert_eq!(compute_scores(&pos), compute_scores_slow(&pos));
+    }
 }

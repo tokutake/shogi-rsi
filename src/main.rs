@@ -29,6 +29,17 @@ fn main() {
             let n = pos.perft(d);
             println!("perft {} = {} ({:.2}s)", d, n, t.elapsed().as_secs_f64());
         }
+        Some("divide") => {
+            // perft の内訳: 各合法手と、その後の局面の perft(d-1) と SFEN（合法手生成のデバッグ用）
+            let d: u32 = args[2].parse().unwrap();
+            let mut pos = Position::from_sfen(&args[3..].join(" ")).unwrap();
+            for m in pos.legal_moves() {
+                pos.do_move(m);
+                let n = if d > 1 { pos.perft(d - 1) } else { 1 };
+                println!("{} {} {}", move_to_usi(m), n, pos.to_sfen());
+                pos.undo_move();
+            }
+        }
         Some("bench") => {
             // 固定局面群を固定深さで探索し、ノード数と NPS を出す（高速化の計測用）
             let depth: i32 = arg_value(&args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(6);
