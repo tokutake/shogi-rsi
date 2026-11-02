@@ -177,19 +177,62 @@ pub struct Tables {
     pub step_mask: [[u8; 16]; 2],
     /// slide_mask[color][pt] = 飛んで動ける方向のビット集合
     pub slide_mask: [[u8; 16]; 2],
+    /// ray_mask[sq][dir] = ray[sq][dir] の升の集合（ビットボード）
+    pub ray_mask: [[u128; 8]; 81],
+    /// step_bb[color][pt][sq] = 1歩（桂は跳び先）で動ける升の集合。飛び駒の方向は含まない
+    pub step_bb: [[[u128; 81]; 16]; 2],
+}
+
+/// 盤上 81 升の集合
+pub const BOARD_BB: u128 = (1u128 << 81) - 1;
+
+const fn file_bb(c: usize) -> u128 {
+    let mut b = 0u128;
+    let mut r = 0;
+    while r < 9 {
+        b |= 1u128 << (r * 9 + c);
+        r += 1;
+    }
+    b
+}
+/// 筋（列 c）の升の集合
+pub const FILE_BB: [u128; 9] = [file_bb(0), file_bb(1), file_bb(2), file_bb(3), file_bb(4), file_bb(5), file_bb(6), file_bb(7), file_bb(8)];
+
+/// 方向 d（DIRS8 の添字）は升番号が増える向きか
+#[inline(always)]
+pub fn dir_positive(d: usize) -> bool {
+    d >= 4
+}
+
+/// ray 上の最初の駒の升（blockers は ray_mask & 占有、非 0）
+#[inline(always)]
+pub fn first_blocker(blockers: u128, d: usize) -> usize {
+    if dir_positive(d) {
+        blockers.trailing_zeros() as usize
+    } else {
+        127 - blockers.leading_zeros() as usize
+    }
 }
 
 pub fn tables() -> &'static Tables {
     use std::sync::OnceLock;
     static T: OnceLock<Tables> = OnceLock::new();
     T.get_or_init(|| {
-        let mut t = Tables { ray: [[[0; 8]; 8]; 81], ray_len: [[0; 8]; 81], step_mask: [[0; 16]; 2], slide_mask: [[0; 16]; 2] };
+        let mut t = Tables {
+            ray: [[[0; 8]; 8]; 81],
+            ray_len: [[0; 8]; 81],
+            step_mask: [[0; 16]; 2],
+            slide_mask: [[0; 16]; 2],
+            ray_mask: [[0; 8]; 81],
+            step_bb: [[[0; 81]; 16]; 2],
+        };
         for sq in 0..81 {
             for (d, &(dr, dc)) in DIRS8.iter().enumerate() {
                 let (mut r, mut c) = ((sq / 9) as i32 + dr, (sq % 9) as i32 + dc);
                 let mut n = 0;
                 while (0..9).contains(&r) && (0..9).contains(&c) {
                     t.ray[sq][d][n] = (r * 9 + c) as u8;
+                    t.ray_mask[sq][d] |= 1u128 << (r * 9 + c);
                     n += 1;
                     r += dr;
                     c += dc;
@@ -206,6 +249,27 @@ pub fn tables() -> &'static Tables {
                     } else if can_step_black(pt, dr * sign, dc * sign) {
                         t.step_mask[color][pt as usize] |= 1 << d;
                     }
+                }
+                for sq in 0..81 {
+                    let mut b = 0u128;
+                    if pt == KNIGHT {
+                        let (r, c) = ((sq / 9) as i32, (sq % 9) as i32);
+                        let tr = r - 2 * sign;
+                        if (0..9).contains(&tr) {
+                            for tc in [c - 1, c + 1] {
+                                if (0..9).contains(&tc) {
+                                    b |= 1u128 << (tr * 9 + tc);
+                                }
+                            }
+                        }
+                    } else {
+                        for d in 0..8 {
+                            if t.step_mask[color][pt as usize] & (1 << d) != 0 && t.ray_len[sq][d] > 0 {
+                                b |= 1u128 << t.ray[sq][d][0];
+                            }
+                        }
+                    }
+                    t.step_bb[color][pt as usize][sq] = b;
                 }
             }
         }
@@ -269,6 +333,8 @@ struct Undo {
 #[derive(Clone)]
 pub struct Position {
     pub board: [u8; 81],
+    /// 各色の駒のある升の集合（board と常に一致させる）
+    pub occ: [u128; 2],
     pub hand: [[u8; 8]; 2],
     pub side: Color,
     pub king_sq: [usize; 2],
@@ -304,6 +370,7 @@ impl Position {
         }
         let mut pos = Position {
             board: [EMPTY; 81],
+            occ: [0, 0],
             hand: [[0; 8]; 2],
             side: BLACK,
             king_sq: [81, 81],
@@ -347,6 +414,7 @@ impl Position {
                     }
                     let sq = r * 9 + c;
                     pos.board[sq] = make_piece(color, pt);
+                    pos.occ[color] |= 1u128 << sq;
                     if pt == KING {
                         pos.king_sq[color] = sq;
                     }
@@ -515,6 +583,7 @@ impl Position {
             let p = make_piece(us, pt);
             moved = p;
             self.board[to] = p;
+            self.occ[us] |= 1u128 << to;
             self.hash ^= z.board[p as usize][to];
             if !dirty {
                 self.eval[us] += super::eval::piece_score(to, p, &self.king_sq) - super::eval::hand_score(pt as usize, n);
@@ -525,6 +594,7 @@ impl Position {
             moved = p;
             captured = self.board[to];
             if captured != EMPTY {
+                self.occ[us ^ 1] &= !(1u128 << to);
                 self.hash ^= z.board[captured as usize][to];
                 let cpt = unpromote(ptype(captured)) as usize;
                 let n = self.hand[us][cpt] as usize;
@@ -538,6 +608,7 @@ impl Position {
             }
             self.hash ^= z.board[p as usize][from];
             self.board[from] = EMPTY;
+            self.occ[us] ^= (1u128 << from) | (1u128 << to);
             let np = if mv_is_promo(m) { make_piece(us, promote(ptype(p))) } else { p };
             self.board[to] = np;
             self.hash ^= z.board[np as usize][to];
@@ -592,20 +663,22 @@ impl Position {
                     let u = &self.history[k - 1];
                     let m = u.mv;
                     if m != NO_MOVE {
+                        let mut dl = super::eval::NnDelta::<16>::new();
                         let c = color_of(u.moved);
                         let to = mv_to(m);
                         if mv_is_drop(m) {
-                            super::eval::nn_piece(&mut acc, to, u.moved, &ksq, 1.0);
-                            super::eval::nn_hand(&mut acc, c, ptype(u.moved) as usize, u.hand_n as usize, -1.0);
+                            dl.piece(to, u.moved, &ksq, 1.0);
+                            dl.hand(c, ptype(u.moved) as usize, u.hand_n as usize, -1.0);
                         } else {
                             if u.captured != EMPTY {
-                                super::eval::nn_piece(&mut acc, to, u.captured, &ksq, -1.0);
-                                super::eval::nn_hand(&mut acc, c, unpromote(ptype(u.captured)) as usize, u.hand_n as usize + 1, 1.0);
+                                dl.piece(to, u.captured, &ksq, -1.0);
+                                dl.hand(c, unpromote(ptype(u.captured)) as usize, u.hand_n as usize + 1, 1.0);
                             }
                             let np = if mv_is_promo(m) { make_piece(c, promote(ptype(u.moved))) } else { u.moved };
-                            super::eval::nn_piece(&mut acc, mv_from(m), u.moved, &ksq, -1.0);
-                            super::eval::nn_piece(&mut acc, to, np, &ksq, 1.0);
+                            dl.piece(mv_from(m), u.moved, &ksq, -1.0);
+                            dl.piece(to, np, &ksq, 1.0);
                         }
+                        dl.apply(&mut acc);
                     }
                     self.nn_acc[k] = acc;
                     self.nn_ok[k] = true;
@@ -627,13 +700,16 @@ impl Position {
             let pt = mv_drop_pt(m);
             self.hand[us][pt as usize] += 1;
             self.board[to] = EMPTY;
+            self.occ[us] &= !(1u128 << to);
         } else {
             let from = mv_from(m);
             let p = self.board[to];
             let orig = if mv_is_promo(m) { make_piece(us, unpromote(ptype(p))) } else { p };
             self.board[from] = orig;
             self.board[to] = u.captured;
+            self.occ[us] ^= (1u128 << from) | (1u128 << to);
             if u.captured != EMPTY {
+                self.occ[us ^ 1] |= 1u128 << to;
                 self.hand[us][unpromote(ptype(u.captured)) as usize] -= 1;
             }
             if ptype(orig) == KING {
@@ -696,14 +772,14 @@ impl Position {
     /// sq に color 側の駒の利きがあるか
     pub fn is_attacked(&self, sq: usize, by: Color) -> bool {
         let t = tables();
+        let occ = self.occ[0] | self.occ[1];
         for d in 0..8 {
-            let len = t.ray_len[sq][d] as usize;
-            if len == 0 {
+            if t.ray_len[sq][d] == 0 {
                 continue;
             }
             let od = 7 - d; // 攻め駒から sq への方向
-            let ray = &t.ray[sq][d];
-            let p = self.board[ray[0] as usize];
+            let adj = t.ray[sq][d][0] as usize;
+            let p = self.board[adj];
             if p != EMPTY {
                 if color_of(p) == by {
                     let pt = ptype(p) as usize;
@@ -713,14 +789,13 @@ impl Position {
                 }
                 continue;
             }
-            for i in 1..len {
-                let p = self.board[ray[i] as usize];
-                if p != EMPTY {
-                    if color_of(p) == by && t.slide_mask[by][ptype(p) as usize] & (1 << od) != 0 {
-                        return true;
-                    }
-                    break;
-                }
+            let blockers = t.ray_mask[sq][d] & occ;
+            if blockers == 0 {
+                continue;
+            }
+            let p = self.board[first_blocker(blockers, d)];
+            if color_of(p) == by && t.slide_mask[by][ptype(p) as usize] & (1 << od) != 0 {
+                return true;
             }
         }
         // 桂馬
@@ -744,27 +819,26 @@ impl Position {
         let t = tables();
         let us = self.side;
         let ksq = self.king_sq[us];
+        let occ = self.occ[0] | self.occ[1];
         let mut pinned = 0u128;
         for d in 0..8 {
-            let len = t.ray_len[ksq][d] as usize;
+            let blockers = t.ray_mask[ksq][d] & occ;
+            if blockers == 0 {
+                continue;
+            }
+            let first = first_blocker(blockers, d);
+            if self.occ[us] >> first & 1 == 0 {
+                continue;
+            }
+            let rest = blockers & !(1u128 << first);
+            if rest == 0 {
+                continue;
+            }
+            let second = first_blocker(rest, d);
+            let p = self.board[second];
             let od = 7 - d;
-            let ray = &t.ray[ksq][d];
-            let mut first = 81usize;
-            for i in 0..len {
-                let sq = ray[i] as usize;
-                let p = self.board[sq];
-                if p == EMPTY {
-                    continue;
-                }
-                if color_of(p) == us {
-                    if first == 81 {
-                        first = sq;
-                        continue;
-                    }
-                } else if first != 81 && t.slide_mask[us ^ 1][ptype(p) as usize] & (1 << od) != 0 {
-                    pinned |= 1u128 << first;
-                }
-                break;
+            if color_of(p) != us && t.slide_mask[us ^ 1][ptype(p) as usize] & (1 << od) != 0 {
+                pinned |= 1u128 << first;
             }
         }
         pinned
@@ -812,55 +886,63 @@ impl Position {
     /// captures_only = true なら駒を取る手（と成る手）のみ
     pub fn pseudo_moves(&self, list: &mut Vec<Move>, captures_only: bool) {
         let us = self.side;
-        let sign = if us == BLACK { 1 } else { -1 };
-        for from in 0..81 {
-            let p = self.board[from];
-            if p == EMPTY || color_of(p) != us {
-                continue;
-            }
-            let pt = ptype(p);
+        let t = tables();
+        let occ = self.occ[0] | self.occ[1];
+        let not_own = !self.occ[us];
+        let target_mask = if captures_only { self.occ[us ^ 1] } else { not_own & BOARD_BB };
+        let mut own = self.occ[us];
+        while own != 0 {
+            let from = own.trailing_zeros() as usize;
+            own &= own - 1;
+            let pt = ptype(self.board[from]);
             let fr = (from / 9) as i32;
-            if pt == KNIGHT {
-                let fc = (from % 9) as i32;
-                let tr = fr - 2 * sign;
-                if (0..9).contains(&tr) {
-                    for tc in [fc - 1, fc + 1] {
-                        if (0..9).contains(&tc) {
-                            let to = (tr * 9 + tc) as usize;
-                            let t = self.board[to];
-                            if t != EMPTY && color_of(t) == us {
-                                continue;
-                            }
-                            if captures_only && t == EMPTY {
-                                continue;
-                            }
-                            self.push_board_move(list, from, to, pt, fr, tr);
-                        }
-                    }
+            let lmask = t.slide_mask[us][pt as usize];
+            if lmask == 0 {
+                // 1歩の駒・桂（行き先は升番号の昇順 = 方向順）
+                let mut b = t.step_bb[us][pt as usize][from] & target_mask;
+                while b != 0 {
+                    let to = b.trailing_zeros() as usize;
+                    b &= b - 1;
+                    self.push_board_move(list, from, to, pt, fr, (to / 9) as i32);
                 }
                 continue;
             }
-            let t = tables();
             let smask = t.step_mask[us][pt as usize];
-            let lmask = t.slide_mask[us][pt as usize];
             for d in 0..8 {
                 let bit = 1u8 << d;
                 if (smask | lmask) & bit == 0 {
                     continue;
                 }
-                let len = if lmask & bit != 0 { t.ray_len[from][d] as usize } else { (t.ray_len[from][d] as usize).min(1) };
-                for i in 0..len {
-                    let to = t.ray[from][d][i] as usize;
-                    let tgt = self.board[to];
-                    if tgt != EMPTY && color_of(tgt) == us {
-                        break;
+                let blockers = t.ray_mask[from][d] & occ;
+                let slide = lmask & bit != 0;
+                if blockers == 0 {
+                    if !captures_only {
+                        let n = if slide { t.ray_len[from][d] as usize } else { (t.ray_len[from][d] as usize).min(1) };
+                        for i in 0..n {
+                            let to = t.ray[from][d][i] as usize;
+                            self.push_board_move(list, from, to, pt, fr, (to / 9) as i32);
+                        }
                     }
-                    if !captures_only || tgt != EMPTY {
+                    continue;
+                }
+                let blk = first_blocker(blockers, d);
+                let step = t.ray[from][d][0] as usize;
+                // blk までの距離（升数）
+                let dist = if dir_positive(d) { (blk - from) / (step - from) } else { (from - blk) / (from - step) };
+                if !slide && dist > 1 {
+                    if !captures_only {
+                        self.push_board_move(list, from, step, pt, fr, (step / 9) as i32);
+                    }
+                    continue;
+                }
+                if !captures_only {
+                    for i in 0..dist - 1 {
+                        let to = t.ray[from][d][i] as usize;
                         self.push_board_move(list, from, to, pt, fr, (to / 9) as i32);
                     }
-                    if tgt != EMPTY {
-                        break;
-                    }
+                }
+                if self.occ[us ^ 1] >> blk & 1 != 0 {
+                    self.push_board_move(list, from, blk, pt, fr, (blk / 9) as i32);
                 }
             }
         }
@@ -872,21 +954,20 @@ impl Position {
         if hand.iter().all(|&n| n == 0) {
             return;
         }
-        // 空き升と自分の歩のある筋を 1 回の走査で集める
-        let own_pawn = make_piece(us, PAWN);
-        let mut pawn_files = [false; 9];
-        let mut empties = [0u8; 81];
-        let mut ne = 0;
-        for sq in 0..81 {
-            let p = self.board[sq];
-            if p == EMPTY {
-                empties[ne] = sq as u8;
-                ne += 1;
-            } else if p == own_pawn {
-                pawn_files[sq % 9] = true;
+        let empties = BOARD_BB & !occ;
+        let mut pawn_file_bb = 0u128;
+        if hand[PAWN as usize] > 0 {
+            let own_pawn = make_piece(us, PAWN);
+            let mut b = self.occ[us];
+            while b != 0 {
+                let sq = b.trailing_zeros() as usize;
+                b &= b - 1;
+                if self.board[sq] == own_pawn {
+                    pawn_file_bb |= FILE_BB[sq % 9];
+                }
             }
         }
-        let empties = &empties[..ne];
+        let n_empty = empties.count_ones() as usize;
         for pt in PAWN..=ROOK {
             if hand[pt as usize] == 0 {
                 continue;
@@ -897,16 +978,15 @@ impl Position {
                 KNIGHT => 2,
                 _ => 0,
             };
-            let (lo, hi) = if us == BLACK { (dead * 9, 81) } else { (0, 81 - dead * 9) };
-            list.reserve(ne);
-            for &to in empties {
-                let to = to as usize;
-                if to < lo || to >= hi {
-                    continue;
-                }
-                if pt == PAWN && pawn_files[to % 9] {
-                    continue;
-                }
+            let ranks = if us == BLACK { BOARD_BB & !((1u128 << (dead * 9)) - 1) } else { (1u128 << (81 - dead * 9)) - 1 };
+            let mut b = empties & ranks;
+            if pt == PAWN {
+                b &= !pawn_file_bb;
+            }
+            list.reserve(n_empty);
+            while b != 0 {
+                let to = b.trailing_zeros() as usize;
+                b &= b - 1;
                 list.push(mv_drop(pt, to));
             }
         }
@@ -988,3 +1068,44 @@ impl Position {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ランダムな手順で、占有ビットボードが盤面と一致し続けること・指して戻すと元に戻ることを確かめる
+    #[test]
+    fn occupancy_matches_board() {
+        let mut rng = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..50 {
+            let mut pos = Position::startpos();
+            let mut n = 0;
+            for _ in 0..200 {
+                let moves = pos.legal_moves();
+                if moves.is_empty() {
+                    break;
+                }
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                pos.do_move(moves[(rng % moves.len() as u64) as usize]);
+                n += 1;
+                for c in 0..2 {
+                    let mut b = 0u128;
+                    for sq in 0..81 {
+                        if pos.board[sq] != EMPTY && color_of(pos.board[sq]) == c {
+                            b |= 1u128 << sq;
+                        }
+                    }
+                    assert_eq!(b, pos.occ[c]);
+                }
+            }
+            let sfen = pos.to_sfen();
+            for _ in 0..n {
+                pos.undo_move();
+            }
+            assert_eq!(pos.occ, Position::startpos().occ);
+            assert!(!sfen.is_empty());
+        }
+    }
+}

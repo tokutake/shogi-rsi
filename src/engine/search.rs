@@ -230,7 +230,8 @@ impl Searcher {
         SearchResult { best, score: best_score, depth: done_depth, nodes: self.nodes }
     }
 
-    fn order_moves(&mut self, pos: &Position, moves: &mut [Move], tt_move: Move, ply: usize) {
+    /// see_checked = true なら、損な取り（取り返される）は呼び出し側で除いてある
+    fn order_moves(&mut self, pos: &Position, moves: &mut [Move], tt_move: Move, ply: usize, see_checked: bool) {
         let mut scored = std::mem::take(&mut self.scratch);
         scored.clear();
         scored.extend(moves.iter().map(|&m| {
@@ -239,7 +240,7 @@ impl Searcher {
                 } else if !mv_is_drop(m) && pos.board[mv_to(m)] != EMPTY {
                     let victim = PIECE_VALUE[ptype(pos.board[mv_to(m)]) as usize];
                     let attacker = PIECE_VALUE[ptype(pos.board[mv_from(m)]) as usize];
-                    if attacker > victim + 50 && pos.is_attacked(mv_to(m), pos.side ^ 1) {
+                    if !see_checked && attacker > victim + 50 && pos.is_attacked(mv_to(m), pos.side ^ 1) {
                         // 取り返される損な取りは静かな手の後ろに回す
                         60_000 + victim - attacker / 10
                     } else {
@@ -384,7 +385,7 @@ impl Searcher {
         let mut moves = std::mem::take(&mut self.move_bufs[ply]);
         moves.clear();
         pos.pseudo_moves(&mut moves, false);
-        self.order_moves(pos, &mut moves, tt_move, ply);
+        self.order_moves(pos, &mut moves, tt_move, ply, false);
 
         let orig_alpha = alpha;
         let mut best_score = -INF;
@@ -522,19 +523,22 @@ impl Searcher {
         let mut moves = std::mem::take(&mut self.move_bufs[ply]);
         moves.clear();
         pos.pseudo_moves(&mut moves, !in_check);
-        self.order_moves(pos, &mut moves, NO_MOVE, MAX_PLY);
+        if !in_check {
+            // 安い駒を高い駒で取り、取り返される手は読まない（簡易 SEE）。並べ替えの前に除く
+            moves.retain(|&m| {
+                let victim = PIECE_VALUE[ptype(pos.board[mv_to(m)]) as usize];
+                let attacker = PIECE_VALUE[ptype(pos.board[mv_from(m)]) as usize];
+                !(attacker > victim + 50 && pos.is_attacked(mv_to(m), pos.side ^ 1))
+            });
+        }
+        self.order_moves(pos, &mut moves, NO_MOVE, MAX_PLY, !in_check);
         let mut legal = 0;
         let pinned = if really_in_check { 0 } else { pos.pinned_mask() };
         for &m in moves.iter() {
             if !in_check && !mv_is_drop(m) {
                 let victim = PIECE_VALUE[ptype(pos.board[mv_to(m)]) as usize];
-                let attacker = PIECE_VALUE[ptype(pos.board[mv_from(m)]) as usize];
                 // Delta pruning
                 if best + victim + 200 <= alpha && !mv_is_promo(m) {
-                    continue;
-                }
-                // 安い駒を高い駒で取り、取り返される手は読まない（簡易 SEE）
-                if attacker > victim + 50 && pos.is_attacked(mv_to(m), pos.side ^ 1) {
                     continue;
                 }
             }
