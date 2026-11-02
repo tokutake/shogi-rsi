@@ -222,5 +222,13 @@
     "parent": "v27-fubuki",
     "created": "2026-11-01T07:33:50Z",
     "description": "探索: 置換表の探索値が静的評価より正確な側の境界（exact、または静的評価より高い lower / 低い upper）なら、reverse futility・null move・futility の判定に使う評価をその値に置き換える"
+  },
+  {
+    "number": 29,
+    "name": "hibari",
+    "commit": "f1d153bd4c1465fae128a4203940c5113ee8e251",
+    "parent": "v28-gekko",
+    "created": "2026-11-02T02:57:17Z",
+    "description": "高速化: 占有ビットボード（u128）で指し手生成・利き判定・pin 判定、NN 隠れ層の差分更新を 1 パスに融合、線形評価を合成表引きに（探索・評価は v28 と同一、命令数 -20%）"
   }
 ]
