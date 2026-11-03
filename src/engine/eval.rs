@@ -412,4 +412,46 @@ mod tests {
         let pos = Position::from_sfen("l6nl/5+P1gk/2np1S3/p1p4Pp/3P2Sp1/1PPb2P1P/P5GS1/R8/LN4bKL w RGgsn5p 1").unwrap();
         assert_eq!(compute_scores(&pos), compute_scores_slow(&pos));
     }
+
+    #[test]
+    fn nn_incremental_matches_full() {
+        // 乱数で手を進め、ときどきだけ評価して（差分の鎖・玉移動を挟む）全計算と一致するか確かめる
+        let mut pos = Position::from_sfen(STARTPOS_SFEN).unwrap();
+        let mut seed: u64 = 12345;
+        let mut rnd = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        let mut checked = 0;
+        for _game in 0..20 {
+            let mut pos2 = Position::from_sfen(STARTPOS_SFEN).unwrap();
+            for _ply in 0..150 {
+                let moves = pos2.legal_moves();
+                if moves.is_empty() {
+                    break;
+                }
+                pos2.do_move(moves[rnd(moves.len())]);
+                if rnd(3) == 0 {
+                    let side = pos2.side;
+                    let a = nn_output(pos2.nn_acc(), side);
+                    let b = nn_output(&compute_nn(&pos2), side);
+                    assert!((a - b).abs() < 1e-2, "{} vs {}", a, b);
+                    checked += 1;
+                }
+            }
+            // 戻しても一致する
+            while pos2.ply > 0 && rnd(4) != 0 {
+                pos2.undo_move();
+                let side = pos2.side;
+                let a = nn_output(pos2.nn_acc(), side);
+                let b = nn_output(&compute_nn(&pos2), side);
+                assert!((a - b).abs() < 1e-2, "{} vs {}", a, b);
+            }
+            pos = pos2;
+        }
+        let _ = pos;
+        assert!(checked > 100);
+    }
 }

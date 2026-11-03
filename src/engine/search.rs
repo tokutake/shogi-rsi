@@ -80,7 +80,8 @@ pub struct Searcher {
     evals: [i32; MAX_PLY + 2],
     history: Vec<i32>, // [piece(32)][to(81)]
     pub verbose: bool,
-    scratch: Vec<(i32, Move)>,
+    score_bufs: Vec<Vec<i64>>,
+    scratch: Vec<(i64, Move)>,
     move_bufs: Vec<Vec<Move>>,
     quiet_bufs: Vec<Vec<Move>>,
 }
@@ -120,6 +121,7 @@ impl Searcher {
             evals: [-INF; MAX_PLY + 2],
             history: vec![0; 32 * 81],
             verbose: true,
+            score_bufs: vec![Vec::with_capacity(160); MAX_PLY + 2],
             scratch: Vec::with_capacity(256),
             move_bufs: vec![Vec::with_capacity(160); MAX_PLY + 2],
             quiet_bufs: vec![Vec::with_capacity(64); MAX_PLY + 2],
@@ -230,12 +232,14 @@ impl Searcher {
         SearchResult { best, score: best_score, depth: done_depth, nodes: self.nodes }
     }
 
+    /// 手に順序付け用の点数を付けて score_bufs[buf] に入れる（並べ替えは pick_move で必要な分だけ行う）。
     /// see_checked = true なら、損な取り（取り返される）は呼び出し側で除いてある
-    fn order_moves(&mut self, pos: &Position, moves: &mut [Move], tt_move: Move, ply: usize, see_checked: bool) {
-        let mut scored = std::mem::take(&mut self.scratch);
-        scored.clear();
-        scored.extend(moves.iter().map(|&m| {
-                let s = if m == tt_move {
+    fn order_moves(&mut self, pos: &Position, moves: &[Move], tt_move: Move, ply: usize, see_checked: bool, buf: usize) {
+        let mut scores = std::mem::take(&mut self.score_bufs[buf]);
+        scores.clear();
+        // 同点の手は生成順（並べ替えの方法によらず順序が決まるよう、生成番号を下位ビットに入れる）
+        scores.extend(moves.iter().enumerate().map(|(idx, &m)| {
+                let s: i32 = if m == tt_move {
                     1_000_000
                 } else if !mv_is_drop(m) && pos.board[mv_to(m)] != EMPTY {
                     let victim = PIECE_VALUE[ptype(pos.board[mv_to(m)]) as usize];
@@ -253,13 +257,40 @@ impl Searcher {
                 } else {
                     self.history[Self::hist_idx(pos, m)].min(70_000)
                 };
-                (s, m)
+                ((s as i64) << 12) | (4095 - idx as i64)
             }));
-        scored.sort_unstable_by(|a, b| b.0.cmp(&a.0));
-        for (i, &(_, m)) in scored.iter().enumerate() {
-            moves[i] = m;
+        self.score_bufs[buf] = scores;
+    }
+
+    /// i 番目に読む手を返す。先頭 PICK_SELECT 手は残りから最大の手を選び（カットされれば残りは並べない）、
+    /// それ以降は残りをまとめて並べ替える
+    #[inline]
+    fn pick_move(&mut self, moves: &mut [Move], i: usize, buf: usize) -> Move {
+        const PICK_SELECT: usize = 8;
+        let n = moves.len();
+        let scores = &mut self.score_bufs[buf];
+        if i < PICK_SELECT {
+            let mut best = i;
+            let mut bs = scores[i];
+            for j in i + 1..n {
+                if scores[j] > bs {
+                    bs = scores[j];
+                    best = j;
+                }
+            }
+            moves.swap(i, best);
+            scores.swap(i, best);
+        } else if i == PICK_SELECT && n > i + 1 {
+            let pairs = &mut self.scratch;
+            pairs.clear();
+            pairs.extend(scores[i..].iter().copied().zip(moves[i..].iter().copied()));
+            pairs.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+            for (k, &(sc, m)) in pairs.iter().enumerate() {
+                moves[i + k] = m;
+                scores[i + k] = sc;
+            }
         }
-        self.scratch = scored;
+        moves[i]
     }
 
     #[inline]
@@ -385,7 +416,7 @@ impl Searcher {
         let mut moves = std::mem::take(&mut self.move_bufs[ply]);
         moves.clear();
         pos.pseudo_moves(&mut moves, false);
-        self.order_moves(pos, &mut moves, tt_move, ply, false);
+        self.order_moves(pos, &moves, tt_move, ply, false, ply);
 
         let orig_alpha = alpha;
         let mut best_score = -INF;
@@ -394,7 +425,8 @@ impl Searcher {
         let pinned = if in_check { 0 } else { pos.pinned_mask() };
         let mut quiets_tried = std::mem::take(&mut self.quiet_bufs[ply]);
         quiets_tried.clear();
-        for &m in moves.iter() {
+        for mi in 0..moves.len() {
+            let m = self.pick_move(&mut moves, mi, ply);
             let quiet = !mv_is_promo(m) && (mv_is_drop(m) || pos.board[mv_to(m)] == EMPTY);
             let hidx = Self::hist_idx(pos, m);
             if !self.try_move(pos, m, !in_check, pinned) {
@@ -531,10 +563,11 @@ impl Searcher {
                 !(attacker > victim + 50 && pos.is_attacked(mv_to(m), pos.side ^ 1))
             });
         }
-        self.order_moves(pos, &mut moves, NO_MOVE, MAX_PLY, !in_check);
+        self.order_moves(pos, &moves, NO_MOVE, MAX_PLY, !in_check, ply);
         let mut legal = 0;
         let pinned = if really_in_check { 0 } else { pos.pinned_mask() };
-        for &m in moves.iter() {
+        for mi in 0..moves.len() {
+            let m = self.pick_move(&mut moves, mi, ply);
             if !in_check && !mv_is_drop(m) {
                 let victim = PIECE_VALUE[ptype(pos.board[mv_to(m)]) as usize];
                 // Delta pruning
