@@ -1,3 +1,0 @@
-# x86-64 では AVX2 / BMI2 などを使う（x86-64-v3。NN 隠れ層の加算などが 256 ビット幅になる。探索・評価の結果は同一）
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "target-cpu=x86-64-v3"]
