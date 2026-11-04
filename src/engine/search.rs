@@ -362,8 +362,8 @@ impl Searcher {
         let improving = !in_check && ply >= 2 && self.evals[ply - 2] != -INF && raw_eval > self.evals[ply - 2];
 
         // Reverse futility pruning（静的評価が beta を大きく上回るなら打ち切り）
-        if !pv && !in_check && depth <= 6 && ply > 0 && beta.abs() < MATE - 1000
-            && static_eval - (150 - 50 * improving as i32) * depth >= beta
+        if !pv && !in_check && depth <= 3 && ply > 0 && beta.abs() < MATE - 1000
+            && static_eval - (150 + 50 * !improving as i32) * depth >= beta
         {
             return static_eval;
         }
