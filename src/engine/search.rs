@@ -220,12 +220,8 @@ impl Searcher {
             if score.abs() > MATE - 1000 {
                 break;
             }
-            // 次の反復が終わりそうになければ打ち切る
-            if let Some(t) = self.time_ms {
-                if self.start.elapsed().as_millis() as u64 * 4 > t * 3 {
-                    break;
-                }
-            }
+            // 秒読みでは残り時間を持ち越せないので、反復が終わりそうになくても打ち切らず最後まで読む
+            // （途中で打ち切った反復でも、ルートで alpha を更新した手は使う）
         }
         SearchResult { best, score: best_score, depth: done_depth, nodes: self.nodes }
     }
