@@ -220,8 +220,12 @@ impl Searcher {
             if score.abs() > MATE - 1000 {
                 break;
             }
-            // 秒読みでは残り時間を持ち越せないので、反復が終わりそうになくても打ち切らず最後まで読む
-            // （途中で打ち切った反復でも、ルートで alpha を更新した手は使う）
+            // 次の反復が終わりそうになければ打ち切る
+            if let Some(t) = self.time_ms {
+                if self.start.elapsed().as_millis() as u64 * 4 > t * 3 {
+                    break;
+                }
+            }
         }
         SearchResult { best, score: best_score, depth: done_depth, nodes: self.nodes }
     }
@@ -256,6 +260,12 @@ impl Searcher {
             moves[i] = m;
         }
         self.scratch = scored;
+    }
+
+    #[inline]
+    fn hist_update(h: &mut i32, bonus: i32) {
+        const HIST_MAX: i32 = 16384;
+        *h += bonus - *h * bonus.abs() / HIST_MAX;
     }
 
     #[inline]
@@ -428,9 +438,9 @@ impl Searcher {
                         r += 1;
                     }
                     let h = self.history[hidx];
-                    if h > 2000 {
+                    if h > 4000 {
                         r -= 1;
-                    } else if h < -500 {
+                    } else if h < -2000 {
                         r += 1;
                     }
                     r = r.clamp(0, depth - 2);
@@ -463,10 +473,12 @@ impl Searcher {
                                 self.killers[ply][1] = self.killers[ply][0];
                                 self.killers[ply][0] = m;
                             }
-                            self.history[hidx] += depth * depth;
+                            // history gravity: 値が大きいほど更新が小さくなり、±HIST_MAX に収まる
+                            let bonus = (depth * depth * 16).min(4000);
+                            Self::hist_update(&mut self.history[hidx], bonus);
                             for &q in quiets_tried.iter() {
                                 let qi = Self::hist_idx(pos, q);
-                                self.history[qi] -= depth * depth / 2;
+                                Self::hist_update(&mut self.history[qi], -bonus / 2);
                             }
                         }
                         break;
