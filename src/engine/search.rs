@@ -10,9 +10,6 @@ use super::browser_clock::Instant;
 pub const INF: i32 = 32000;
 pub const MATE: i32 = 31000;
 pub const MAX_PLY: usize = 128;
-const CORR_SIZE: usize = 1 << 14;
-const CORR_GRAIN: i32 = 256;
-const CORR_MAX: i32 = 128 * CORR_GRAIN;
 
 #[derive(Clone, Copy, Default)]
 struct TTEntry {
@@ -82,7 +79,6 @@ pub struct Searcher {
     killers: [[Move; 2]; MAX_PLY + 1],
     evals: [i32; MAX_PLY + 2],
     history: Vec<i32>, // [piece(32)][to(81)]
-    corr: Vec<i32>, // 評価の補正 [pawn_hand_key & (CORR_SIZE-1)]
     pub verbose: bool,
     scratch: Vec<(i32, Move)>,
     move_bufs: Vec<Vec<Move>>,
@@ -123,7 +119,6 @@ impl Searcher {
             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
             evals: [-INF; MAX_PLY + 2],
             history: vec![0; 32 * 81],
-            corr: vec![0; CORR_SIZE],
             verbose: true,
             scratch: Vec::with_capacity(256),
             move_bufs: vec![Vec::with_capacity(160); MAX_PLY + 2],
@@ -355,11 +350,8 @@ impl Searcher {
         // 静的評価は置換表に保存しておき、再訪時は評価関数を呼ばない（玉移動後は子が全計算を繰り返さないよう評価する）
         let raw_eval = if in_check { -INF } else if tt_eval != -INF && !pos.eval_dirty() { tt_eval } else { evaluate(pos) };
         self.evals[ply] = raw_eval;
-        // 評価の補正（correction history）: 同じ歩の配置・持ち駒で探索値が静的評価からずれた量の平均を足す
-        let corr_idx = if in_check { 0 } else { pos.pawn_hand_key() as usize & (CORR_SIZE - 1) };
-        let corr_eval = if in_check { -INF } else { (raw_eval + self.corr[corr_idx] / CORR_GRAIN).clamp(-MATE + 1000, MATE - 1000) };
         // 枝刈り用の評価: 置換表の探索値が静的評価より正確な側の境界なら、そちらを使う
-        let mut static_eval = corr_eval;
+        let mut static_eval = raw_eval;
         if !in_check {
             if let Some((s, f)) = tt_bound {
                 if s.abs() < MATE - 1000 && (f == 1 || (f == 2 && s > static_eval) || (f == 3 && s < static_eval)) {
@@ -503,17 +495,6 @@ impl Searcher {
             3
         };
         self.tt.store(key, best_move, score_to_tt(best_score, ply), raw_eval, depth, flag);
-        let best_quiet = best_move == NO_MOVE
-            || (!mv_is_promo(best_move) && (mv_is_drop(best_move) || pos.board[mv_to(best_move)] == EMPTY));
-        if !in_check && best_quiet && best_score.abs() < MATE - 1000
-            && !(flag == 2 && best_score <= corr_eval)
-            && !(flag == 3 && best_score >= corr_eval)
-        {
-            let diff = (best_score - raw_eval).clamp(-CORR_MAX / CORR_GRAIN, CORR_MAX / CORR_GRAIN) * CORR_GRAIN;
-            let w = (depth + 1).min(16);
-            let e = &mut self.corr[corr_idx];
-            *e = ((*e * (256 - w) + diff * w) / 256).clamp(-CORR_MAX, CORR_MAX);
-        }
         best_score
     }
 

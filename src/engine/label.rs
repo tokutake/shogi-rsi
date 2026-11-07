@@ -24,6 +24,7 @@ pub fn run_label(args: &[String]) {
     let mut stride = 2;
     let mut threads = 4;
     let mut offset = 0;
+    let mut keep_order = false;
     let mut i = 0;
     while i + 1 < args.len() {
         match args[i].as_str() {
@@ -33,6 +34,7 @@ pub fn run_label(args: &[String]) {
             "--stride" => stride = args[i + 1].parse().unwrap(),
             "--threads" => threads = args[i + 1].parse().unwrap(),
             "--offset" => offset = args[i + 1].parse().unwrap(),
+            "--keep-order" => keep_order = args[i + 1] == "1",
             _ => {}
         }
         i += 2;
@@ -70,9 +72,9 @@ pub fn run_label(args: &[String]) {
             }
         }
     }
-    // 途中で打ち切っても偏らないよう、順序をシャッフルする
+    // 途中で打ち切っても偏らないよう、順序をシャッフルする（--keep-order 1 なら対局順のまま。nntrain の対局単位の検証分割用）
     let mut rs = 0x9E3779B97F4A7C15u64;
-    for i in (1..items.len()).rev() {
+    for i in (1..if keep_order { 0 } else { items.len() }).rev() {
         rs ^= rs << 13;
         rs ^= rs >> 7;
         rs ^= rs << 17;
