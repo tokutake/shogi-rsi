@@ -524,6 +524,27 @@ impl Position {
         h
     }
 
+    /// 歩の配置＋持ち駒＋手番のキー（探索の評価補正用）
+    pub fn pawn_hand_key(&self) -> u64 {
+        let z = zobrist();
+        let mut h = if self.side == WHITE { z.side } else { 0 };
+        for c in 0..2 {
+            let mut b = self.occ[c];
+            while b != 0 {
+                let sq = b.trailing_zeros() as usize;
+                b &= b - 1;
+                let p = self.board[sq];
+                if ptype(p) == PAWN {
+                    h ^= z.board[p as usize][sq];
+                }
+            }
+            for pt in 1..8 {
+                h ^= z.hand[c][pt][self.hand[c][pt] as usize];
+            }
+        }
+        h
+    }
+
     /// 盤面＋持ち駒＋手番のキー（千日手判定用）
     #[inline]
     pub fn key(&self) -> u64 {
