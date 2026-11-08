@@ -10,10 +10,6 @@ use super::browser_clock::Instant;
 pub const INF: i32 = 32000;
 pub const MATE: i32 = 31000;
 pub const MAX_PLY: usize = 128;
-/// singular extension を試す最小の深さ
-const SE_DEPTH: i32 = 8;
-const SE_MAX_PATH: i32 = 2;
-const SE_MARGIN: i32 = 2;
 
 #[derive(Clone, Copy, Default)]
 struct TTEntry {
@@ -87,11 +83,6 @@ pub struct Searcher {
     scratch: Vec<(i32, Move)>,
     move_bufs: Vec<Vec<Move>>,
     quiet_bufs: Vec<Vec<Move>>,
-    /// singular extension の判定中に除外している手（ply ごと）
-    excluded: [Move; MAX_PLY + 2],
-    root_depth: i32,
-    /// ルートからこの ply までの経路で行った singular extension の回数
-    path_ext: [i32; MAX_PLY + 2],
 }
 
 #[inline]
@@ -132,9 +123,6 @@ impl Searcher {
             scratch: Vec::with_capacity(256),
             move_bufs: vec![Vec::with_capacity(160); MAX_PLY + 2],
             quiet_bufs: vec![Vec::with_capacity(64); MAX_PLY + 2],
-            excluded: [NO_MOVE; MAX_PLY + 2],
-            root_depth: 0,
-            path_ext: [0; MAX_PLY + 2],
         }
     }
 
@@ -183,7 +171,6 @@ impl Searcher {
             };
             let mut score;
             self.root_best = NO_MOVE;
-            self.root_depth = depth;
             loop {
                 score = self.negamax(pos, depth, 0, lo, hi, true);
                 if self.stopped {
@@ -335,17 +322,14 @@ impl Searcher {
             return evaluate(pos);
         }
         let key = pos.key();
-        let excluded = self.excluded[ply];
         let mut tt_move = NO_MOVE;
         let mut tt_eval = -INF;
         let mut tt_bound: Option<(i32, u8)> = None;
-        let mut tt_depth = -1;
         if let Some(e) = self.tt.probe(key) {
             tt_move = e.mv;
             tt_eval = e.eval as i32;
-            tt_depth = e.depth as i32;
             tt_bound = Some((score_from_tt(e.score, ply), e.flag));
-            if !pv && ply > 0 && excluded == NO_MOVE && e.depth as i32 >= depth {
+            if !pv && ply > 0 && e.depth as i32 >= depth {
                 let s = score_from_tt(e.score, ply);
                 match e.flag {
                     1 => return s,
@@ -378,16 +362,15 @@ impl Searcher {
         let improving = !in_check && ply >= 2 && self.evals[ply - 2] != -INF && raw_eval > self.evals[ply - 2];
 
         // Reverse futility pruning（静的評価が beta を大きく上回るなら打ち切り）
-        if !pv && !in_check && excluded == NO_MOVE && depth <= 3 && ply > 0 && beta.abs() < MATE - 1000 && static_eval - 150 * depth >= beta {
+        if !pv && !in_check && depth <= 3 && ply > 0 && beta.abs() < MATE - 1000 && static_eval - 150 * depth >= beta {
             return static_eval;
         }
 
         // Null move pruning
-        if !pv && !in_check && excluded == NO_MOVE && depth >= 3 && ply > 0 && beta.abs() < MATE - 1000 && pos.last_move() != NO_MOVE {
+        if !pv && !in_check && depth >= 3 && ply > 0 && beta.abs() < MATE - 1000 && pos.last_move() != NO_MOVE {
             if static_eval >= beta {
                 let r = 2 + depth / 4;
                 pos.do_null_move();
-                self.path_ext[ply + 1] = self.path_ext[ply];
                 let score = -self.negamax(pos, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
                 pos.undo_null_move();
                 if self.stopped {
@@ -395,28 +378,6 @@ impl Searcher {
                 }
                 if score >= beta {
                     return if score > MATE - 1000 { beta } else { score };
-                }
-            }
-        }
-
-        // Singular extension: 置換表の手を除いた浅い探索がその手の値より十分低ければ、置換表の手だけが良い手なので 1 延長する。
-        // 除いても beta を超えるなら（他にも良い手がある）この局面は打ち切る（multi-cut）
-        let mut tt_ext = 0;
-        if ply > 0 && !in_check && self.path_ext[ply] < SE_MAX_PATH && excluded == NO_MOVE && depth >= SE_DEPTH && tt_move != NO_MOVE && tt_depth >= depth - 3 {
-            if let Some((ts, f)) = tt_bound {
-                if (f == 1 || f == 2) && ts.abs() < MATE - 1000 {
-                    let sb = ts - SE_MARGIN * depth;
-                    self.excluded[ply] = tt_move;
-                    let s = self.negamax(pos, (depth - 1) / 2, ply, sb - 1, sb, false);
-                    self.excluded[ply] = NO_MOVE;
-                    if self.stopped {
-                        return 0;
-                    }
-                    if s < sb {
-                        tt_ext = 1;
-                    } else if !pv && sb >= beta {
-                        return sb;
-                    }
                 }
             }
         }
@@ -434,11 +395,6 @@ impl Searcher {
         let mut quiets_tried = std::mem::take(&mut self.quiet_bufs[ply]);
         quiets_tried.clear();
         for &m in moves.iter() {
-            if m == excluded {
-                continue;
-            }
-            let ext = if m == tt_move { tt_ext } else { 0 };
-            self.path_ext[ply + 1] = self.path_ext[ply] + ext;
             let quiet = !mv_is_promo(m) && (mv_is_drop(m) || pos.board[mv_to(m)] == EMPTY);
             let hidx = Self::hist_idx(pos, m);
             if !self.try_move(pos, m, !in_check, pinned) {
@@ -462,7 +418,7 @@ impl Searcher {
             }
             let mut score;
             if legal == 1 {
-                score = -self.negamax(pos, depth - 1 + ext, ply + 1, -beta, -alpha, pv);
+                score = -self.negamax(pos, depth - 1, ply + 1, -beta, -alpha, pv);
             } else {
                 // Late move reduction
                 let mut r = 0;
@@ -483,12 +439,12 @@ impl Searcher {
                     }
                     r = r.clamp(0, depth - 2);
                 }
-                score = -self.negamax(pos, depth - 1 + ext - r, ply + 1, -alpha - 1, -alpha, false);
+                score = -self.negamax(pos, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
                 if score > alpha && r > 0 {
-                    score = -self.negamax(pos, depth - 1 + ext, ply + 1, -alpha - 1, -alpha, false);
+                    score = -self.negamax(pos, depth - 1, ply + 1, -alpha - 1, -alpha, false);
                 }
                 if score > alpha && score < beta && pv {
-                    score = -self.negamax(pos, depth - 1 + ext, ply + 1, -beta, -alpha, true);
+                    score = -self.negamax(pos, depth - 1, ply + 1, -beta, -alpha, true);
                 }
             }
             pos.undo_move();
@@ -538,9 +494,7 @@ impl Searcher {
         } else {
             3
         };
-        if excluded == NO_MOVE {
-            self.tt.store(key, best_move, score_to_tt(best_score, ply), raw_eval, depth, flag);
-        }
+        self.tt.store(key, best_move, score_to_tt(best_score, ply), raw_eval, depth, flag);
         best_score
     }
 
