@@ -87,93 +87,49 @@ fn load(paths: &[String], lambda: f32, k: f32) -> (Samples, Samples) {
 struct Net {
     w1: Vec<f32>, // NN_IN * NN_H
     b1: Vec<f32>,
-    v: Vec<f32>,  // 2 * NN_H
-    w2: Vec<f32>, // NN_H2 * 2 * NN_H
-    b2: Vec<f32>, // NN_H2
-    u: Vec<f32>,  // NN_H2
-}
-
-// 平坦化したパラメータの各部の先頭
-const O_B1: usize = NN_IN * NN_H;
-const O_V: usize = O_B1 + NN_H;
-const O_W2: usize = O_V + 2 * NN_H;
-const O_B2: usize = O_W2 + NN_H2 * 2 * NN_H;
-const O_U: usize = O_B2 + NN_H2;
-
-/// 順伝播の途中の値
-struct Act {
-    a: [[f32; NN_H]; 2],
-    h: [f32; 2 * NN_H],
-    z: [f32; NN_H2],
-}
-impl Act {
-    fn new() -> Act {
-        Act { a: [[0.0; NN_H]; 2], h: [0.0; 2 * NN_H], z: [0.0; NN_H2] }
-    }
+    v: Vec<f32>, // 2 * NN_H
 }
 
 impl Net {
     fn len() -> usize {
-        NN_LEN2
+        NN_IN * NN_H + NN_H + 2 * NN_H
     }
     fn to_flat(&self) -> Vec<f32> {
         let mut x = Vec::with_capacity(Self::len());
         x.extend_from_slice(&self.w1);
         x.extend_from_slice(&self.b1);
         x.extend_from_slice(&self.v);
-        x.extend_from_slice(&self.w2);
-        x.extend_from_slice(&self.b2);
-        x.extend_from_slice(&self.u);
         x
     }
     fn from_flat(x: &[f32]) -> Net {
         Net {
-            w1: x[..O_B1].to_vec(),
-            b1: x[O_B1..O_V].to_vec(),
-            v: x[O_V..O_W2].to_vec(),
-            w2: x[O_W2..O_B2].to_vec(),
-            b2: x[O_B2..O_U].to_vec(),
-            u: x[O_U..].to_vec(),
+            w1: x[..NN_IN * NN_H].to_vec(),
+            b1: x[NN_IN * NN_H..NN_IN * NN_H + NN_H].to_vec(),
+            v: x[NN_IN * NN_H + NN_H..].to_vec(),
         }
     }
-    fn forward(&self, d: &Samples, si: usize, t: &mut Act) -> f32 {
+    fn forward(&self, d: &Samples, si: usize, h: &mut [[f32; NN_H]; 2], a: &mut [[f32; NN_H]; 2]) -> f32 {
         for side in 0..2 {
-            t.a[side].copy_from_slice(&self.b1);
+            a[side].copy_from_slice(&self.b1);
             for &(i, n) in d.side(si, side) {
                 let n = n as f32;
                 let row = &self.w1[i as usize * NN_H..(i as usize + 1) * NN_H];
                 for j in 0..NN_H {
-                    t.a[side][j] += row[j] * n;
+                    a[side][j] += row[j] * n;
                 }
             }
             for j in 0..NN_H {
-                t.h[side * NN_H + j] = t.a[side][j].clamp(0.0, 1.0);
+                h[side][j] = a[side][j].clamp(0.0, 1.0);
             }
         }
         let mut out = 0.0;
-        for j in 0..2 * NN_H {
-            out += self.v[j] * t.h[j];
-        }
-        for k in 0..NN_H2 {
-            let row = &self.w2[k * 2 * NN_H..(k + 1) * 2 * NN_H];
-            let mut z = self.b2[k];
-            for j in 0..2 * NN_H {
-                z += row[j] * t.h[j];
+        for side in 0..2 {
+            for j in 0..NN_H {
+                out += self.v[side * NN_H + j] * h[side][j];
             }
-            t.z[k] = z;
-            out += self.u[k] * z.clamp(0.0, 1.0);
         }
         out
     }
-}
-
-/// 第 2 層を足す: 出力重み u = 0（出力は元の重みと同じ）、w2 は小さな乱数、b2 = 0.5
-fn add_layer2(f: &[f32], rng: &mut Rng) -> Vec<f32> {
-    let mut x = f.to_vec();
-    x.extend((0..NN_H2 * 2 * NN_H).map(|_| (rng.uniform() - 0.5) * 0.2));
-    x.extend(std::iter::repeat(0.5).take(NN_H2));
-    x.extend(std::iter::repeat(0.0).take(NN_H2));
-    x
 }
 
 fn loss(net: &Net, data: &Samples, k: f32, use_nn: bool) -> f64 {
@@ -185,10 +141,11 @@ fn loss(net: &Net, data: &Samples, k: f32, use_nn: bool) -> f64 {
             .chunks(chunk)
             .map(|ch| {
                 sc.spawn(move || {
-                    let mut t = Act::new();
+                    let mut h = [[0.0; NN_H]; 2];
+                    let mut a = [[0.0; NN_H]; 2];
                     let mut l = 0.0f64;
                     for &si in ch {
-                        let o = if use_nn { net.forward(data, si, &mut t) } else { 0.0 };
+                        let o = if use_nn { net.forward(data, si, &mut h, &mut a) } else { 0.0 };
                         let p = sigmoid(k * (data.lin[si] + o));
                         l += ((data.target[si] - p) as f64).powi(2);
                     }
@@ -225,8 +182,6 @@ pub fn run_nntrain(args: &[String]) {
     let mut lr_v = 0.5f32;
     let mut batch = 4096usize;
     let mut l2 = 0.0f32;
-    let mut lr_2 = 0.001f32;
-    let mut lr_u = 0.1f32;
     let mut i = 0;
     while i + 1 < args.len() {
         match args[i].as_str() {
@@ -240,8 +195,6 @@ pub fn run_nntrain(args: &[String]) {
             "--lr-v" => lr_v = args[i + 1].parse().unwrap(),
             "--batch" => batch = args[i + 1].parse().unwrap(),
             "--l2" => l2 = args[i + 1].parse().unwrap(),
-            "--lr-2" => lr_2 = args[i + 1].parse().unwrap(),
-            "--lr-u" => lr_u = args[i + 1].parse().unwrap(),
             _ => {}
         }
         i += 2;
@@ -254,29 +207,23 @@ pub fn run_nntrain(args: &[String]) {
             let b = std::fs::read(path).unwrap();
             let f: Vec<f32> = b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
             let old_base = NN_HANDK; // 持ち駒の枚数特徴がない旧形式の 1 視点あたりの入力数
-            if f.len() == NN_LEN1 {
-                // 第 2 層なしの形式（v32 以前）: 出力重み 0 の第 2 層を足す（出力は元と同じ）
-                Net::from_flat(&add_layer2(&f, &mut rng))
-            } else if f.len() == 2 * old_base * NN_H + 3 * NN_H {
+            if f.len() == 2 * old_base * NN_H + 3 * NN_H {
                 // 持ち駒の枚数特徴がない旧形式: 各視点の末尾に 0 の行を足す（出力は旧形式と同じ）
                 let mut w1 = vec![0.0; NN_IN * NN_H];
                 w1[..old_base * NN_H].copy_from_slice(&f[..old_base * NN_H]);
                 w1[NN_BASE * NN_H..(NN_BASE + old_base) * NN_H].copy_from_slice(&f[old_base * NN_H..2 * old_base * NN_H]);
                 let o = 2 * old_base * NN_H;
-                let mut x = w1;
-                x.extend_from_slice(&f[o..]);
-                Net::from_flat(&add_layer2(&x, &mut rng))
+                Net { w1, b1: f[o..o + NN_H].to_vec(), v: f[o + NN_H..].to_vec() }
             } else {
                 assert_eq!(f.len(), Net::len(), "init size mismatch");
                 Net::from_flat(&f)
             }
         }
-        None => {
-            let mut x: Vec<f32> = (0..NN_IN * NN_H).map(|_| (rng.uniform() - 0.5) * 0.1).collect();
-            x.extend(std::iter::repeat(0.5).take(NN_H));
-            x.extend(std::iter::repeat(0.0).take(2 * NN_H));
-            Net::from_flat(&add_layer2(&x, &mut rng))
-        }
+        None => Net {
+            w1: (0..NN_IN * NN_H).map(|_| (rng.uniform() - 0.5) * 0.1).collect(),
+            b1: vec![0.5; NN_H],
+            v: vec![0.0; 2 * NN_H],
+        },
     };
     eprintln!("linear only: valid loss {:.6}", loss(&net, &valid, k, false));
     eprintln!("initial   : valid loss {:.6}", loss(&net, &valid, k, true));
@@ -308,41 +255,22 @@ pub fn run_nntrain(args: &[String]) {
                         let train = &train;
                         sc.spawn(move || {
                             let mut g = vec![0.0f32; n_par];
-                            let mut t = Act::new();
+                            let mut h = [[0.0; NN_H]; 2];
+                            let mut a = [[0.0; NN_H]; 2];
                             for &si in ch {
-                                let o = cur.forward(train, si, &mut t);
+                                let o = cur.forward(train, si, &mut h, &mut a);
                                 let p = sigmoid(k * (train.lin[si] + o));
                                 let gout = -2.0 * (train.target[si] - p) * p * (1.0 - p) * k;
-                                // 出力 → 第 2 層
-                                let mut dh = [0.0f32; 2 * NN_H];
-                                for j in 0..2 * NN_H {
-                                    g[O_V + j] += gout * t.h[j];
-                                    dh[j] = gout * cur.v[j];
-                                }
-                                for kk in 0..NN_H2 {
-                                    let z = t.z[kk];
-                                    g[O_U + kk] += gout * z.clamp(0.0, 1.0);
-                                    if z > 0.0 && z < 1.0 {
-                                        let dz = gout * cur.u[kk];
-                                        g[O_B2 + kk] += dz;
-                                        let row = &cur.w2[kk * 2 * NN_H..(kk + 1) * 2 * NN_H];
-                                        let grow = &mut g[O_W2 + kk * 2 * NN_H..O_W2 + (kk + 1) * 2 * NN_H];
-                                        for j in 0..2 * NN_H {
-                                            grow[j] += dz * t.h[j];
-                                            dh[j] += dz * row[j];
-                                        }
-                                    }
-                                }
                                 for side in 0..2 {
                                     let mut da = [0.0f32; NN_H];
                                     for j in 0..NN_H {
-                                        let a = t.a[side][j];
-                                        if a > 0.0 && a < 1.0 {
-                                            da[j] = dh[side * NN_H + j];
+                                        g[NN_IN * NN_H + NN_H + side * NN_H + j] += gout * h[side][j];
+                                        if a[side][j] > 0.0 && a[side][j] < 1.0 {
+                                            da[j] = gout * cur.v[side * NN_H + j];
                                         }
                                     }
                                     for j in 0..NN_H {
-                                        g[O_B1 + j] += da[j];
+                                        g[NN_IN * NN_H + j] += da[j];
                                     }
                                     for &(fi, n) in train.side(si, side) {
                                         let n = n as f32;
@@ -368,7 +296,7 @@ pub fn run_nntrain(args: &[String]) {
                     g += p[idx];
                 }
                 g /= bn;
-                let is_v = (O_V..O_W2).contains(&idx) || idx >= O_U;
+                let is_v = idx >= NN_IN * NN_H + NN_H;
                 if l2 > 0.0 && !is_v {
                     g += l2 * x[idx];
                 }
@@ -376,15 +304,7 @@ pub fn run_nntrain(args: &[String]) {
                 vv[idx] = b2c * vv[idx] + (1.0 - b2c) * g * g;
                 let mh = m[idx] / (1.0 - b1c.powi(step));
                 let vh = vv[idx] / (1.0 - b2c.powi(step));
-                let lr = if idx >= O_U {
-                    lr_u
-                } else if is_v {
-                    lr_v
-                } else if idx >= O_W2 {
-                    lr_2
-                } else {
-                    lr_w
-                };
+                let lr = if is_v { lr_v } else { lr_w };
                 x[idx] -= lr * mh / (vh.sqrt() + eps);
             }
             net = Net::from_flat(&x);

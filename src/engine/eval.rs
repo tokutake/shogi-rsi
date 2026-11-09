@@ -272,37 +272,20 @@ pub fn nn_index(idx: usize) -> Option<usize> {
     }
 }
 
-/// 第 2 層（隠れ層 2 視点ぶんの活性 2*NN_H → NN_H2、クリップ ReLU）。出力は第 1 層からの直結（v）との和
-pub const NN_H2: usize = 16;
-
 pub struct Nn {
     pub enabled: bool,
     pub w1: Vec<[f32; NN_H]>,
     pub b1: [f32; NN_H],
     pub v: [[f32; NN_H]; 2], // [手番側, 相手側]
-    pub w2t: [[f32; NN_H2]; 2 * NN_H], // 第 2 層の重み（転置: [入力][出力]）
-    pub b2: [f32; NN_H2],
-    pub u: [f32; NN_H2], // 第 2 層 → 出力（0 なら第 2 層なしと同じ）
 }
-
-/// 重みファイルの f32 の個数（第 2 層なしの旧形式, 第 2 層つき）
-pub const NN_LEN1: usize = NN_IN * NN_H + NN_H + 2 * NN_H;
-pub const NN_LEN2: usize = NN_LEN1 + NN_H2 * 2 * NN_H + 2 * NN_H2;
 
 pub fn nn() -> &'static Nn {
     static N: OnceLock<Nn> = OnceLock::new();
     N.get_or_init(|| {
         let bytes: &[u8] = include_bytes!("nn.bin");
-        let mut nn = Nn {
-            enabled: false,
-            w1: Vec::new(),
-            b1: [0.0; NN_H],
-            v: [[0.0; NN_H]; 2],
-            w2t: [[0.0; NN_H2]; 2 * NN_H],
-            b2: [0.0; NN_H2],
-            u: [0.0; NN_H2],
-        };
-        if bytes.len() != NN_LEN1 * 4 && bytes.len() != NN_LEN2 * 4 {
+        let total = NN_IN * NN_H + NN_H + 2 * NN_H;
+        let mut nn = Nn { enabled: false, w1: Vec::new(), b1: [0.0; NN_H], v: [[0.0; NN_H]; 2] };
+        if bytes.len() != total * 4 {
             return nn;
         }
         let f: Vec<f32> = bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
@@ -315,17 +298,6 @@ pub fn nn() -> &'static Nn {
         nn.b1.copy_from_slice(&f[o..o + NN_H]);
         nn.v[0].copy_from_slice(&f[o + NN_H..o + 2 * NN_H]);
         nn.v[1].copy_from_slice(&f[o + 2 * NN_H..o + 3 * NN_H]);
-        if f.len() == NN_LEN2 {
-            let mut o = NN_LEN1;
-            for k in 0..NN_H2 {
-                for j in 0..2 * NN_H {
-                    nn.w2t[j][k] = f[o + j];
-                }
-                o += 2 * NN_H;
-            }
-            nn.b2.copy_from_slice(&f[o..o + NN_H2]);
-            nn.u.copy_from_slice(&f[o + NN_H2..o + 2 * NN_H2]);
-        }
         nn.enabled = true;
         nn
     })
@@ -411,28 +383,9 @@ pub fn compute_nn(pos: &Position) -> [[f32; NN_H]; 2] {
 #[inline]
 pub fn nn_output(acc: &[[f32; NN_H]; 2], us: usize) -> f32 {
     let n = nn();
-    let mut h = [0.0f32; 2 * NN_H];
-    for i in 0..NN_H {
-        h[i] = acc[us][i].clamp(0.0, 1.0);
-        h[NN_H + i] = acc[us ^ 1][i].clamp(0.0, 1.0);
-    }
     let mut s = 0.0f32;
     for i in 0..NN_H {
-        s += n.v[0][i] * h[i] + n.v[1][i] * h[NN_H + i];
-    }
-    // 第 2 層: 0 でない入力の行だけを足す（要素ごとの加算なので SIMD 化される）
-    let mut z = n.b2;
-    for j in 0..2 * NN_H {
-        let x = h[j];
-        if x != 0.0 {
-            let row = &n.w2t[j];
-            for k in 0..NN_H2 {
-                z[k] += row[k] * x;
-            }
-        }
-    }
-    for k in 0..NN_H2 {
-        s += n.u[k] * z[k].clamp(0.0, 1.0);
+        s += n.v[0][i] * acc[us][i].clamp(0.0, 1.0) + n.v[1][i] * acc[us ^ 1][i].clamp(0.0, 1.0);
     }
     s
 }
