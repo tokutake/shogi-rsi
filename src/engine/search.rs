@@ -10,7 +10,6 @@ use super::browser_clock::Instant;
 pub const INF: i32 = 32000;
 pub const MATE: i32 = 31000;
 pub const MAX_PLY: usize = 128;
-const HANG_DEPTH: i32 = 6;
 
 #[derive(Clone, Copy, Default)]
 struct TTEntry {
@@ -416,17 +415,6 @@ impl Searcher {
             {
                 pos.undo_move();
                 continue;
-            }
-            // 浅い深さで、静かな手（駒打ち含む）で歩以外の駒をタダで取られる升に置く手は読まない
-            if !pv && !in_check && !gives_check && quiet && depth <= HANG_DEPTH && legal > 1
-                && best_score > -MATE + 1000
-            {
-                let to = mv_to(m);
-                let pt = ptype(pos.board[to]);
-                if PIECE_VALUE[pt as usize] >= 300 && pos.is_attacked(to, pos.side) && !pos.is_attacked(to, pos.side ^ 1) {
-                    pos.undo_move();
-                    continue;
-                }
             }
             let mut score;
             if legal == 1 {
