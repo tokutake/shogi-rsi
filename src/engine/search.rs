@@ -10,7 +10,7 @@ use super::browser_clock::Instant;
 pub const INF: i32 = 32000;
 pub const MATE: i32 = 31000;
 pub const MAX_PLY: usize = 128;
-const HANG_DEPTH: i32 = 3;
+const HANG_DEPTH: i32 = 6;
 
 #[derive(Clone, Copy, Default)]
 struct TTEntry {
