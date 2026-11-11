@@ -254,5 +254,13 @@
     "parent": "v31-kagero",
     "created": "2026-11-07T03:34:34Z",
     "description": "評価: 対局記録（v19 以降同士の 27800 局、100ms）から 104 万局面を v31 の深さ6で評価付けし、線形（lr 0.3）と NN（lambda 0.2・l2 1e-5・lr-w 0.00005・lr-v 0.01, 3 epoch）を v31 の重みから追加学習"
+  },
+  {
+    "number": 33,
+    "name": "nowaki",
+    "commit": "05f51d39cf332338fe6a1f1489c055da13c9c6d2",
+    "parent": "v32-mikazuki",
+    "created": "2026-11-11T02:15:12Z",
+    "description": "探索: 時間制限つきの探索で、通常の探索の前にルートで王手だけの詰み探索（df-pn、30000 局面・持ち時間の 1/5 まで）をし、詰めばその手を指す"
   }
 ]
