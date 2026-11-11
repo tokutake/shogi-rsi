@@ -78,6 +78,52 @@ fn gen_checks(pos: &mut Position, out: &mut Vec<(Move, u64)>) {
     let ksq = pos.king_sq[them];
     let mut list = Vec::with_capacity(128);
     pos.pseudo_board_moves(&mut list);
+    // 盤上の手は、王手になりうる手だけ残す（直接の利き・開き王手。判定は厳密で、指して確かめる手を減らすだけ）
+    let occ = pos.occ[0] | pos.occ[1];
+    // ray_pos[sq] = 敵玉から方向 d の i 番目（最初の駒まで）なら d * 9 + i + 1、それ以外は 0
+    let mut ray_pos = [0u8; 81];
+    let mut disc = 0u128; // 動くと開き王手になりうる自駒の升
+    for d in 0..8 {
+        let od = 7 - d;
+        let n = t.ray_len[ksq][d] as usize;
+        for i in 0..n {
+            let s = t.ray[ksq][d][i] as usize;
+            ray_pos[s] = (d * 9 + i + 1) as u8;
+            if pos.board[s] != EMPTY {
+                if color_of(pos.board[s]) == us {
+                    let rest = t.ray_mask[s][d] & occ;
+                    if rest != 0 {
+                        let p2 = pos.board[first_blocker(rest, d)];
+                        if color_of(p2) == us && t.slide_mask[us][ptype(p2) as usize] & (1 << od) != 0 {
+                            disc |= 1u128 << s;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+    let knight_sq = t.step_bb[them][KNIGHT as usize][ksq];
+    list.retain(|&m| {
+        let from = mv_from(m);
+        if disc >> from & 1 != 0 {
+            return true;
+        }
+        let to = mv_to(m);
+        let p = pos.board[from];
+        let np = if mv_is_promo(m) { promote(ptype(p)) } else { ptype(p) } as usize;
+        if np == KNIGHT as usize {
+            return knight_sq >> to & 1 != 0;
+        }
+        let rp = ray_pos[to] as usize;
+        if rp == 0 {
+            return false;
+        }
+        let (d, i) = ((rp - 1) / 9, (rp - 1) % 9);
+        let od = 7 - d;
+        let dirs = if i == 0 { t.step_mask[us][np] | t.slide_mask[us][np] } else { t.slide_mask[us][np] };
+        dirs & (1 << od) != 0
+    });
     // 王手になる駒打ち: 敵玉から各方向に空き升をたどり、その升に打つと玉に利く駒
     for d in 0..8 {
         let od = 7 - d;
@@ -126,41 +172,78 @@ fn gen_evasions(pos: &mut Position, out: &mut Vec<(Move, u64)>) {
     let us = pos.side;
     let them = us ^ 1;
     let ksq = pos.king_sq[us];
-    let mut list = Vec::with_capacity(64);
-    pos.pseudo_board_moves(&mut list);
-    // 合駒: 飛び駒の王手の間の升にだけ打てる
-    if pos.hand[us].iter().any(|&n| n > 0) {
-        let occ = pos.occ[0] | pos.occ[1];
-        for d in 0..8 {
-            let blockers = t.ray_mask[ksq][d] & occ;
-            if blockers == 0 {
-                continue;
-            }
-            let first = first_blocker(blockers, d);
-            let p = pos.board[first];
-            let od = 7 - d;
-            if color_of(p) != them || t.slide_mask[them][ptype(p) as usize] & (1 << od) == 0 {
-                continue;
-            }
+    let occ = pos.occ[0] | pos.occ[1];
+    // 王手している駒と、飛び駒の王手の間の升
+    let mut n_checkers = 0;
+    let mut target = 0u128; // 玉以外の駒が動いて王手を解消できる升（王手駒の升と間の升）
+    let mut between = 0u128; // 合駒できる升
+    for d in 0..8 {
+        let blockers = t.ray_mask[ksq][d] & occ;
+        if blockers == 0 {
+            continue;
+        }
+        let first = first_blocker(blockers, d);
+        let p = pos.board[first];
+        if color_of(p) != them {
+            continue;
+        }
+        let od = 7 - d;
+        let pt = ptype(p) as usize;
+        let adjacent = t.ray[ksq][d][0] as usize == first;
+        if adjacent && (t.step_mask[them][pt] | t.slide_mask[them][pt]) & (1 << od) != 0 {
+            n_checkers += 1;
+            target |= 1u128 << first;
+        } else if !adjacent && t.slide_mask[them][pt] & (1 << od) != 0 {
+            n_checkers += 1;
+            target |= 1u128 << first;
             for i in 0..t.ray_len[ksq][d] as usize {
                 let s = t.ray[ksq][d][i] as usize;
                 if s == first {
                     break;
                 }
-                for pt in PAWN..=ROOK {
-                    if pos.hand[us][pt as usize] > 0 && drop_ok(pos, pt, s) {
-                        list.push(mv_drop(pt, s));
-                    }
+                between |= 1u128 << s;
+            }
+        }
+    }
+    let mut kn = t.step_bb[us][KNIGHT as usize][ksq];
+    let their_knight = make_piece(them, KNIGHT);
+    while kn != 0 {
+        let s = kn.trailing_zeros() as usize;
+        kn &= kn - 1;
+        if pos.board[s] == their_knight {
+            n_checkers += 1;
+            target |= 1u128 << s;
+        }
+    }
+    if n_checkers > 1 {
+        target = 0;
+        between = 0;
+    }
+    target |= between;
+    let mut list = Vec::with_capacity(64);
+    pos.pseudo_board_moves(&mut list);
+    list.retain(|&m| mv_from(m) == ksq || target >> mv_to(m) & 1 != 0);
+    // 合駒: 飛び駒の王手の間の升にだけ打てる
+    if between != 0 && pos.hand[us].iter().any(|&n| n > 0) {
+        let mut b = between;
+        while b != 0 {
+            let s = b.trailing_zeros() as usize;
+            b &= b - 1;
+            for pt in PAWN..=ROOK {
+                if pos.hand[us][pt as usize] > 0 && drop_ok(pos, pt, s) {
+                    list.push(mv_drop(pt, s));
                 }
             }
         }
     }
     for m in list {
-        if !legal(pos, m) {
+        if mv_is_drop(m) && mv_drop_pt(m) == PAWN && !pos.is_legal(m) {
             continue;
         }
         pos.do_move(m);
-        out.push((m, pos.key()));
+        if !pos.is_attacked(pos.king_sq[us], them) {
+            out.push((m, pos.key()));
+        }
         pos.undo_move();
     }
 }

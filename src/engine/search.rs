@@ -12,7 +12,7 @@ pub const INF: i32 = 32000;
 pub const MATE: i32 = 31000;
 pub const MAX_PLY: usize = 128;
 /// ルートの詰み探索の局面数の上限
-const MATE_NODES: u64 = 5000;
+const MATE_NODES: u64 = 30000;
 
 #[derive(Clone, Copy, Default)]
 struct TTEntry {
@@ -167,9 +167,9 @@ impl Searcher {
         if legal.len() <= 1 {
             return SearchResult { best, score: 0, depth: 0, nodes: 0 };
         }
-        // 王手の連続で詰むなら、通常の探索をせずに指す（持ち時間の 1/10・MATE_NODES 局面まで）
+        // 王手の連続で詰むなら、通常の探索をせずに指す（持ち時間の 1/5・MATE_NODES 局面まで）
         if let Some(t) = limits.time_ms {
-            if let Some(m) = self.mate.solve(pos, MATE_NODES, t / 10) {
+            if let Some(m) = self.mate.solve(pos, MATE_NODES, t / 5) {
                 if legal.contains(&m) {
                     if self.verbose {
                         println!("info depth 0 score mate + nodes {} pv {}", self.mate.nodes(), move_to_usi(m));
