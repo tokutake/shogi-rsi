@@ -1,6 +1,7 @@
 //! 探索部: 反復深化 + αβ(negamax) + 静止探索 + 置換表 + キラー/MVV-LVA。
 
 use super::eval::{evaluate, PIECE_VALUE};
+use super::mate::MateSolver;
 use super::position::*;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -10,6 +11,8 @@ use super::browser_clock::Instant;
 pub const INF: i32 = 32000;
 pub const MATE: i32 = 31000;
 pub const MAX_PLY: usize = 128;
+/// ルートの詰み探索の局面数の上限
+const MATE_NODES: u64 = 5000;
 
 #[derive(Clone, Copy, Default)]
 struct TTEntry {
@@ -69,6 +72,8 @@ pub struct SearchResult {
 
 pub struct Searcher {
     pub tt: TT,
+    /// 時間制限つきの探索で、通常の探索の前にルートで王手だけの詰み探索をする
+    pub mate: MateSolver,
     nodes: u64,
     start: Instant,
     time_ms: Option<u64>,
@@ -110,6 +115,7 @@ impl Searcher {
     pub fn new(tt_mb: usize) -> Self {
         Searcher {
             tt: TT::new(tt_mb),
+            mate: MateSolver::new(4),
             nodes: 0,
             start: Instant::now(),
             time_ms: None,
@@ -160,6 +166,17 @@ impl Searcher {
         let mut done_depth = 0;
         if legal.len() <= 1 {
             return SearchResult { best, score: 0, depth: 0, nodes: 0 };
+        }
+        // 王手の連続で詰むなら、通常の探索をせずに指す（持ち時間の 1/10・MATE_NODES 局面まで）
+        if let Some(t) = limits.time_ms {
+            if let Some(m) = self.mate.solve(pos, MATE_NODES, t / 10) {
+                if legal.contains(&m) {
+                    if self.verbose {
+                        println!("info depth 0 score mate + nodes {} pv {}", self.mate.nodes(), move_to_usi(m));
+                    }
+                    return SearchResult { best: m, score: MATE - 1, depth: 0, nodes: self.mate.nodes() };
+                }
+            }
         }
         for depth in 1..=max_depth {
             // Aspiration window: 前回の評価値の周辺の窓で探索し、外れたら窓を広げて再探索
