@@ -885,6 +885,16 @@ impl Position {
     /// 疑似合法手（自玉への王手放置チェック・打ち歩詰めチェックなし）
     /// captures_only = true なら駒を取る手（と成る手）のみ
     pub fn pseudo_moves(&self, list: &mut Vec<Move>, captures_only: bool) {
+        self.gen_pseudo(list, captures_only, true);
+    }
+
+    /// 盤上の駒を動かす疑似合法手だけ（打つ手を除く）
+    pub fn pseudo_board_moves(&self, list: &mut Vec<Move>) {
+        self.gen_pseudo(list, false, false);
+    }
+
+    #[inline(always)]
+    fn gen_pseudo(&self, list: &mut Vec<Move>, captures_only: bool, with_drops: bool) {
         let us = self.side;
         let t = tables();
         let occ = self.occ[0] | self.occ[1];
@@ -946,7 +956,7 @@ impl Position {
                 }
             }
         }
-        if captures_only {
+        if captures_only || !with_drops {
             return;
         }
         // 打つ手

@@ -48,6 +48,7 @@ pub fn usi_loop() {
             "usinewgame" => {
                 if let Some(s) = searcher.as_mut() {
                     s.tt.clear();
+                    s.mate.clear();
                 }
             }
             "position" => {

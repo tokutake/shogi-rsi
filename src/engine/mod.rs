@@ -2,6 +2,7 @@
 
 pub(crate) mod eval;
 pub(crate) mod game;
+pub(crate) mod mate;
 pub(crate) mod params;
 pub(crate) mod position;
 pub(crate) mod search;
