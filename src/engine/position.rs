@@ -345,7 +345,7 @@ pub struct Position {
     eval_dirty: bool,
     // NN 隠れ層の活性化前の値。nn_acc[i] は i 手目の局面のもので、nn_ok[i] が真のときだけ有効。
     // do_move では更新せず、評価するときに直近の有効な局面から差分で追いつく（遅延更新）。
-    nn_acc: Vec<[[f32; super::eval::NN_H]; 2]>,
+    nn_acc: Vec<super::eval::NnAcc>,
     nn_ok: Vec<bool>,
     history: Vec<Undo>,
 }
@@ -632,14 +632,14 @@ impl Position {
         let i = self.history.len();
         if self.nn_ok.len() <= i {
             self.nn_ok.push(false);
-            self.nn_acc.push([[0.0; super::eval::NN_H]; 2]);
+            self.nn_acc.push([[0; super::eval::NN_H]; 2]);
         } else {
             self.nn_ok[i] = false;
         }
     }
 
     /// 現局面の NN 隠れ層（活性化前）を返す。必要なら直近の有効な局面から差分更新する。
-    pub fn nn_acc(&mut self) -> &[[f32; super::eval::NN_H]; 2] {
+    pub fn nn_acc(&mut self) -> &super::eval::NnAcc {
         let cur = self.history.len();
         if !self.nn_ok[cur] {
             // 有効な祖先を探す。途中で玉が動いていたら全計算
@@ -667,16 +667,16 @@ impl Position {
                         let c = color_of(u.moved);
                         let to = mv_to(m);
                         if mv_is_drop(m) {
-                            dl.piece(to, u.moved, &ksq, 1.0);
-                            dl.hand(c, ptype(u.moved) as usize, u.hand_n as usize, -1.0);
+                            dl.piece(to, u.moved, &ksq, 1);
+                            dl.hand(c, ptype(u.moved) as usize, u.hand_n as usize, -1);
                         } else {
                             if u.captured != EMPTY {
-                                dl.piece(to, u.captured, &ksq, -1.0);
-                                dl.hand(c, unpromote(ptype(u.captured)) as usize, u.hand_n as usize + 1, 1.0);
+                                dl.piece(to, u.captured, &ksq, -1);
+                                dl.hand(c, unpromote(ptype(u.captured)) as usize, u.hand_n as usize + 1, 1);
                             }
                             let np = if mv_is_promo(m) { make_piece(c, promote(ptype(u.moved))) } else { u.moved };
-                            dl.piece(mv_from(m), u.moved, &ksq, -1.0);
-                            dl.piece(to, np, &ksq, 1.0);
+                            dl.piece(mv_from(m), u.moved, &ksq, -1);
+                            dl.piece(to, np, &ksq, 1);
                         }
                         dl.apply(&mut acc);
                     }
