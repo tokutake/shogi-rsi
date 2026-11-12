@@ -272,11 +272,26 @@ pub fn nn_index(idx: usize) -> Option<usize> {
     }
 }
 
+/// 隠れ層の量子化の倍率（推論は i16 の重み・i16 の隠れ層で計算し、出力で 1/NN_Q する）。
+/// 隠れ層の値は ±32 まで表せる（実戦の探索では最大 9.4 程度）。
+pub const NN_Q: f32 = 1024.0;
+pub type NnAcc = [[i16; NN_H]; 2];
+
+/// w1 の 1 行（i16 x 32 = 64 バイト = キャッシュライン 1 本に揃える）
+#[derive(Clone, Copy)]
+#[repr(C, align(64))]
+pub struct NnRow(pub [i16; NN_H]);
+
 pub struct Nn {
     pub enabled: bool,
-    pub w1: Vec<[f32; NN_H]>,
-    pub b1: [f32; NN_H],
-    pub v: [[f32; NN_H]; 2], // [手番側, 相手側]
+    pub w1: Vec<NnRow>,
+    pub b1: [i16; NN_H],
+    pub v: [[f32; NN_H]; 2], // [手番側, 相手側]。量子化した隠れ層に掛けるため 1/NN_Q 済み
+}
+
+#[inline(always)]
+fn quant(x: f32) -> i32 {
+    (x * NN_Q).round() as i32
 }
 
 pub fn nn() -> &'static Nn {
@@ -284,36 +299,34 @@ pub fn nn() -> &'static Nn {
     N.get_or_init(|| {
         let bytes: &[u8] = include_bytes!("nn.bin");
         let total = NN_IN * NN_H + NN_H + 2 * NN_H;
-        let mut nn = Nn { enabled: false, w1: Vec::new(), b1: [0.0; NN_H], v: [[0.0; NN_H]; 2] };
+        let mut nn = Nn { enabled: false, w1: Vec::new(), b1: [0; NN_H], v: [[0.0; NN_H]; 2] };
         if bytes.len() != total * 4 {
             return nn;
         }
         let f: Vec<f32> = bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        nn.w1.reserve_exact(NN_IN);
         for i in 0..NN_IN {
-            let mut row = [0.0f32; NN_H];
-            row.copy_from_slice(&f[i * NN_H..(i + 1) * NN_H]);
-            nn.w1.push(row);
+            let mut row = [0i16; NN_H];
+            for j in 0..NN_H {
+                row[j] = quant(f[i * NN_H + j]).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            }
+            nn.w1.push(NnRow(row));
         }
         let o = NN_IN * NN_H;
-        nn.b1.copy_from_slice(&f[o..o + NN_H]);
-        nn.v[0].copy_from_slice(&f[o + NN_H..o + 2 * NN_H]);
-        nn.v[1].copy_from_slice(&f[o + 2 * NN_H..o + 3 * NN_H]);
+        for j in 0..NN_H {
+            nn.b1[j] = quant(f[o + j]).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            nn.v[0][j] = f[o + NN_H + j] / NN_Q;
+            nn.v[1][j] = f[o + 2 * NN_H + j] / NN_Q;
+        }
         nn.enabled = true;
         nn
     })
 }
 
-#[inline(always)]
-pub fn nn_axpy(acc: &mut [f32; NN_H], row: &[f32; NN_H], k: f32) {
-    for i in 0..NN_H {
-        acc[i] += row[i] * k;
-    }
-}
-
 /// 隠れ層への加算（w1 の行番号と係数）を集めて、各視点の隠れ層ごとに 1 回の走査でまとめて足す。
 /// 各要素への加算順は 1 行ずつ足すのと同じなので結果も同一。
 pub struct NnDelta<const N: usize> {
-    rows: [[MaybeUninit<(u32, f32)>; N]; 2], // 先頭 n[c] 個だけ初期化済み
+    rows: [[MaybeUninit<(u32, i32)>; N]; 2], // 先頭 n[c] 個だけ初期化済み
     n: [usize; 2],
 }
 
@@ -324,13 +337,13 @@ impl<const N: usize> NnDelta<N> {
         NnDelta { rows: [[const { MaybeUninit::uninit() }; N]; 2], n: [0, 0] }
     }
     #[inline(always)]
-    fn push(&mut self, c: Color, row: usize, k: f32) {
+    fn push(&mut self, c: Color, row: usize, k: i32) {
         self.rows[c][self.n[c]] = MaybeUninit::new((row as u32, k));
         self.n[c] += 1;
     }
     /// 線形評価の特徴 (c, idx, k) を NN の両視点に加える
     #[inline(always)]
-    fn term(&mut self, c: Color, idx: usize, k: f32) {
+    fn term(&mut self, c: Color, idx: usize, k: i32) {
         if let Some(i) = nn_index(idx) {
             self.push(c, i, k);
             self.push(c ^ 1, NN_BASE + i, k);
@@ -338,28 +351,39 @@ impl<const N: usize> NnDelta<N> {
     }
     /// 盤上の駒 1 枚の寄与を加減算する（sign = +1 / -1）
     #[inline(always)]
-    pub fn piece(&mut self, sq: usize, p: u8, ksq: &[usize; 2], sign: f32) {
-        piece_terms(sq, p, ksq, &mut |c, idx, k| self.term(c, idx, sign * k as f32));
+    pub fn piece(&mut self, sq: usize, p: u8, ksq: &[usize; 2], sign: i32) {
+        piece_terms(sq, p, ksq, &mut |c, idx, k| self.term(c, idx, sign * k));
     }
     /// 持ち駒 pt の k 枚目を加える（delta = +1）/ 除く（delta = -1）
     #[inline(always)]
-    pub fn hand(&mut self, c: Color, pt: usize, k: usize, delta: f32) {
+    pub fn hand(&mut self, c: Color, pt: usize, k: usize, delta: i32) {
         self.push(c, NN_HAND + pt, delta);
         self.push(c ^ 1, NN_BASE + NN_HAND + pt, delta);
         self.push(c, NN_HANDK + pt * HANDK_W + k, delta);
         self.push(c ^ 1, NN_BASE + NN_HANDK + pt * HANDK_W + k, delta);
     }
     #[inline(always)]
-    pub fn apply(&self, acc: &mut [[f32; NN_H]; 2]) {
+    pub fn apply(&self, acc: &mut NnAcc) {
         let w1 = &nn().w1;
         for c in 0..2 {
             let mut a = acc[c];
             for e in &self.rows[c][..self.n[c]] {
                 // SAFETY: 先頭 n[c] 個は push で初期化済み
                 let (r, k) = unsafe { e.assume_init() };
-                let row = &w1[r as usize];
-                for i in 0..NN_H {
-                    a[i] += row[i] * k;
+                let row = &w1[r as usize].0;
+                if k == 1 {
+                    for i in 0..NN_H {
+                        a[i] = a[i].wrapping_add(row[i]);
+                    }
+                } else if k == -1 {
+                    for i in 0..NN_H {
+                        a[i] = a[i].wrapping_sub(row[i]);
+                    }
+                } else {
+                    let k = k as i16;
+                    for i in 0..NN_H {
+                        a[i] = a[i].wrapping_add(row[i].wrapping_mul(k));
+                    }
                 }
             }
             acc[c] = a;
@@ -368,24 +392,25 @@ impl<const N: usize> NnDelta<N> {
 }
 
 /// 盤面全体から両色の隠れ層（活性化前）を計算する
-pub fn compute_nn(pos: &Position) -> [[f32; NN_H]; 2] {
+pub fn compute_nn(pos: &Position) -> NnAcc {
     let n = nn();
     let mut acc = [n.b1, n.b1];
     if !n.enabled {
         return acc;
     }
     let mut d = NnDelta::<320>::new();
-    eval_terms(pos, |c, idx, k| d.term(c, idx, k as f32));
+    eval_terms(pos, |c, idx, k| d.term(c, idx, k));
     d.apply(&mut acc);
     acc
 }
 
 #[inline]
-pub fn nn_output(acc: &[[f32; NN_H]; 2], us: usize) -> f32 {
+pub fn nn_output(acc: &NnAcc, us: usize) -> f32 {
     let n = nn();
+    let q = NN_Q as i16;
     let mut s = 0.0f32;
     for i in 0..NN_H {
-        s += n.v[0][i] * acc[us][i].clamp(0.0, 1.0) + n.v[1][i] * acc[us ^ 1][i].clamp(0.0, 1.0);
+        s += n.v[0][i] * acc[us][i].clamp(0, q) as f32 + n.v[1][i] * acc[us ^ 1][i].clamp(0, q) as f32;
     }
     s
 }
@@ -437,7 +462,7 @@ mod tests {
                     let side = pos2.side;
                     let a = nn_output(pos2.nn_acc(), side);
                     let b = nn_output(&compute_nn(&pos2), side);
-                    assert!((a - b).abs() < 1e-2, "{} vs {}", a, b);
+                    assert_eq!(a, b);
                     checked += 1;
                 }
             }
@@ -447,7 +472,7 @@ mod tests {
                 let side = pos2.side;
                 let a = nn_output(pos2.nn_acc(), side);
                 let b = nn_output(&compute_nn(&pos2), side);
-                assert!((a - b).abs() < 1e-2, "{} vs {}", a, b);
+                assert_eq!(a, b);
             }
             pos = pos2;
         }
