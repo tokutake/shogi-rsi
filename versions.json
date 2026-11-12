@@ -254,5 +254,13 @@
     "parent": "v31-kagero",
     "created": "2026-11-07T03:34:34Z",
     "description": "評価: 対局記録（v19 以降同士の 27800 局、100ms）から 104 万局面を v31 の深さ6で評価付けし、線形（lr 0.3）と NN（lambda 0.2・l2 1e-5・lr-w 0.00005・lr-v 0.01, 3 epoch）を v31 の重みから追加学習"
+  },
+  {
+    "number": 33,
+    "name": "nadeshiko",
+    "commit": "4d36ac2a804c027429cf49b71a3b91eecf6efb69",
+    "parent": "v32-mikazuki",
+    "created": "2026-11-12T04:28:30Z",
+    "description": "高速化: NN 第 1 層の重みと隠れ層を i16 に量子化（重み 1.3MB で L2 に収まり 4 本同時 NPS 約 +14%）/ 評価: 対局記録（v19 以降 34300 局）から 128 万局面を v32 の深さ6で評価付けし、線形（lr 0.3）と NN（lambda 0.2・l2 1e-5・lr-w 0.00005・lr-v 0.01, 3 epoch）を v32 から追加学習"
   }
 ]
