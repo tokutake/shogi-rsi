@@ -214,22 +214,6 @@ pub fn run_nntrain(args: &[String]) {
                 w1[NN_BASE * NN_H..(NN_BASE + old_base) * NN_H].copy_from_slice(&f[old_base * NN_H..2 * old_base * NN_H]);
                 let o = 2 * old_base * NN_H;
                 Net { w1, b1: f[o..o + NN_H].to_vec(), v: f[o + NN_H..].to_vec() }
-            } else if f.len() != Net::len() && f.len() % (NN_IN + 3) == 0 && f.len() / (NN_IN + 3) < NN_H {
-                // 隠れ層が少ない形式: 追加するユニットの出力重みを 0 で足す（出力は元の形式と同じ）
-                let h = f.len() / (NN_IN + 3);
-                let mut net = Net { w1: vec![0.0; NN_IN * NN_H], b1: vec![0.5; NN_H], v: vec![0.0; 2 * NN_H] };
-                for i in 0..NN_IN {
-                    for j in 0..NN_H {
-                        net.w1[i * NN_H + j] = if j < h { f[i * h + j] } else { (rng.uniform() - 0.5) * 0.1 };
-                    }
-                }
-                let o = NN_IN * h;
-                for j in 0..h {
-                    net.b1[j] = f[o + j];
-                    net.v[j] = f[o + h + j];
-                    net.v[NN_H + j] = f[o + 2 * h + j];
-                }
-                net
             } else {
                 assert_eq!(f.len(), Net::len(), "init size mismatch");
                 Net::from_flat(&f)
