@@ -39,6 +39,7 @@ CODENAMES = [
     "ibuki", "junpu", "kaede", "raiden", "mizuho", "nagi", "oboro", "potomak",
     "rindo", "sakura", "tsubaki", "ukon", "wakaba", "yamato", "zuiun", "akebono",
     "benibana", "chigusa", "fubuki", "gekko", "hibari", "inazuma", "kagero", "mikazuki",
+    "nadeshiko", "otowa", "seiran", "tachibana", "usugumo", "yamabuki",
 ]
 
 
