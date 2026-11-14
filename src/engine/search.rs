@@ -79,7 +79,6 @@ pub struct Searcher {
     killers: [[Move; 2]; MAX_PLY + 1],
     evals: [i32; MAX_PLY + 2],
     history: Vec<i32>, // [piece(32)][to(81)]
-    capt_hist: Vec<i32>, // [piece(32)][to(81)][取られる駒種(16)]
     pub verbose: bool,
     scratch: Vec<(i32, Move)>,
     move_bufs: Vec<Vec<Move>>,
@@ -120,7 +119,6 @@ impl Searcher {
             killers: [[NO_MOVE; 2]; MAX_PLY + 1],
             evals: [-INF; MAX_PLY + 2],
             history: vec![0; 32 * 81],
-            capt_hist: vec![0; 32 * 81 * 16],
             verbose: true,
             scratch: Vec::with_capacity(256),
             move_bufs: vec![Vec::with_capacity(160); MAX_PLY + 2],
@@ -242,12 +240,11 @@ impl Searcher {
                 } else if !mv_is_drop(m) && pos.board[mv_to(m)] != EMPTY {
                     let victim = PIECE_VALUE[ptype(pos.board[mv_to(m)]) as usize];
                     let attacker = PIECE_VALUE[ptype(pos.board[mv_from(m)]) as usize];
-                    let ch = self.capt_hist[Self::capt_idx(pos, m)] / 8;
                     if !see_checked && attacker > victim + 50 && pos.is_attacked(mv_to(m), pos.side ^ 1) {
                         // 取り返される損な取りは静かな手の後ろに回す
-                        60_000 + victim - attacker / 10 + ch / 4
+                        60_000 + victim - attacker / 10
                     } else {
-                        100_000 + victim * 10 - attacker / 10 + ch
+                        100_000 + victim * 10 - attacker / 10
                     }
                 } else if mv_is_promo(m) {
                     90_000
@@ -269,18 +266,6 @@ impl Searcher {
     fn hist_idx(pos: &Position, m: Move) -> usize {
         let p = if mv_is_drop(m) { make_piece(pos.side, mv_drop_pt(m)) } else { pos.board[mv_from(m)] };
         p as usize * 81 + mv_to(m)
-    }
-
-    /// 駒を取る手の capture history の添字（取る手でなければ使わない）
-    #[inline]
-    fn capt_idx(pos: &Position, m: Move) -> usize {
-        Self::hist_idx(pos, m) * 16 + ptype(pos.board[mv_to(m)]) as usize
-    }
-
-    #[inline]
-    fn capt_update(&mut self, idx: usize, bonus: i32) {
-        let h = &mut self.capt_hist[idx];
-        *h += bonus - *h * bonus.abs() / 16384;
     }
 
     /// 疑似合法手を指して、合法なら true（不合法なら戻して false）
@@ -409,12 +394,9 @@ impl Searcher {
         let pinned = if in_check { 0 } else { pos.pinned_mask() };
         let mut quiets_tried = std::mem::take(&mut self.quiet_bufs[ply]);
         quiets_tried.clear();
-        let mut capts_tried: [usize; 32] = [0; 32];
-        let mut n_capts = 0;
         for &m in moves.iter() {
             let quiet = !mv_is_promo(m) && (mv_is_drop(m) || pos.board[mv_to(m)] == EMPTY);
             let hidx = Self::hist_idx(pos, m);
-            let cidx = if !mv_is_drop(m) && pos.board[mv_to(m)] != EMPTY { Self::capt_idx(pos, m) } else { usize::MAX };
             if !self.try_move(pos, m, !in_check, pinned) {
                 continue;
             }
@@ -480,13 +462,6 @@ impl Searcher {
                         self.root_best = m;
                     }
                     if alpha >= beta {
-                        let bonus = (16 * depth * depth).min(4000);
-                        if cidx != usize::MAX {
-                            self.capt_update(cidx, bonus);
-                        }
-                        for &ci in capts_tried[..n_capts].iter() {
-                            self.capt_update(ci, -bonus);
-                        }
                         if quiet {
                             if self.killers[ply][0] != m {
                                 self.killers[ply][1] = self.killers[ply][0];
@@ -504,10 +479,6 @@ impl Searcher {
             }
             if quiet {
                 quiets_tried.push(m);
-            }
-            if cidx != usize::MAX && n_capts < 32 {
-                capts_tried[n_capts] = cidx;
-                n_capts += 1;
             }
         }
         self.move_bufs[ply] = moves;
